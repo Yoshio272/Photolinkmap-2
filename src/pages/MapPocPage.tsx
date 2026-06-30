@@ -108,9 +108,9 @@ export function MapPocPage() {
       const maxH = pageH - margin * 2 - 60
       const scale = Math.min(maxW / png.width, maxH / png.height)
       const w = png.width * scale, h = png.height * scale
-      page.drawText('現場位置図（航空写真）PoC', { x: margin, y: pageH - margin, size: 18 })
+      page.drawText('Site Location Map (Aerial Photo) - PoC', { x: margin, y: pageH - margin, size: 18 })
       page.drawImage(png, { x: margin, y: pageH - margin - 20 - h, width: w, height: h })
-      page.drawText('出典：国土地理院  /  出力日：' + new Date().toLocaleDateString(),
+      page.drawText('Source: GSI (Geospatial Information Authority of Japan)  /  Date: ' + new Date().toLocaleDateString('en-CA'),
         { x: margin, y: margin, size: 10 })
 
       const bytes = await pdf.save()
