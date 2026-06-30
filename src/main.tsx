@@ -1,0 +1,17 @@
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.tsx'
+import { ViewerPage } from './pages/ViewerPage.tsx'
+import { BoxCallbackPage } from './pages/BoxCallbackPage.tsx'
+
+const path = window.location.pathname.replace(/\/$/, '')
+
+const root = createRoot(document.getElementById('root')!)
+if (path === '/viewer' || path.endsWith('/viewer')) {
+  root.render(<StrictMode><ViewerPage /></StrictMode>)
+} else if (path === '/auth/box/callback' || path.endsWith('/auth/box/callback')) {
+  root.render(<StrictMode><BoxCallbackPage /></StrictMode>)
+} else {
+  root.render(<StrictMode><App /></StrictMode>)
+}
