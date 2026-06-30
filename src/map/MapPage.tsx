@@ -249,7 +249,7 @@ export function MapPage() {
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return
     const newGpsPins: MapPin[] = []
-    const newManual: { fileName: string; photoDataUrl: string }[] = []
+    const newManual: { fileName: string; photoDataUrl: string; is360: boolean }[] = []
 
     for (const file of Array.from(files)) {
       const [gps, dataUrl] = await Promise.all([readExifGPS(file), fileToDataUrl(file)])
