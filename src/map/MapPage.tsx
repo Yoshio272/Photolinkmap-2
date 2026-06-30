@@ -107,6 +107,13 @@ export function MapPage() {
   const [syncStatus, setSyncStatus] = useState('')
   const [syncing, setSyncing] = useState(false)
 
+  // ===== C-1：画像化（出力レイヤー全部込み）=====
+  const captureContainerRef = useRef<HTMLDivElement>(null)
+  const [siteName, setSiteName] = useState('')
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [capturing, setCapturing] = useState(false)
+  const [captureLog, setCaptureLog] = useState('')
+
   // 手動配置待ちキューの先頭（地図クリックで配置する対象）
   const pendingHead = pendingManual[0] ?? null
 
@@ -334,12 +341,81 @@ export function MapPage() {
     }
   }
 
+  // ===== C-1：撮影コンテナをhtml2canvasで画像化 =====
+  async function capturePreview() {
+    const container = captureContainerRef.current
+    if (!container) return
+    setCapturing(true)
+    setCaptureLog('画像化中...')
+    setPreviewUrl(null)
+    try {
+      await loadScript('https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js')
+      const html2canvas = (window as any).html2canvas
+      if (!html2canvas) { setCaptureLog('html2canvas 読込失敗'); setCapturing(false); return }
+
+      // タイル読込が落ち着くのを少し待つ
+      await new Promise(r => setTimeout(r, 400))
+
+      const canvas: HTMLCanvasElement = await html2canvas(container, {
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: '#ffffff',
+        scale: 2, // 高解像度
+        logging: false,
+      })
+      const url = canvas.toDataURL('image/png')
+      setPreviewUrl(url)
+      // 簡易チェック：真っ白でないか（地図タイルが写ったか）の目安
+      setCaptureLog(`✓ 画像化成功（${canvas.width}×${canvas.height}px）`)
+    } catch (e: unknown) {
+      setCaptureLog('❌ ' + (e instanceof Error ? e.message : '画像化失敗'))
+    } finally {
+      setCapturing(false)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
-      {/* 地図 */}
+      {/* 地図エリア */}
       <div style={{ flex: 1, position: 'relative' }}>
-        <div ref={mapElRef} style={{ width: '100%', height: '100%' }} />
-        {/* 手動配置の案内バナー */}
+        {/* 撮影コンテナ：地図＋オーバーレイ（これをhtml2canvasで撮る）*/}
+        <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
+          <div ref={mapElRef} style={{ width: '100%', height: '100%' }} />
+
+          {/* オーバーレイ：現場名（左上）*/}
+          {siteName && (
+            <div style={{
+              position: 'absolute', top: 12, left: 12, zIndex: 500,
+              background: 'rgba(255,255,255,0.9)', padding: '6px 12px',
+              borderRadius: 6, fontSize: 16, fontWeight: 700, color: '#222',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+            }}>
+              {siteName}
+            </div>
+          )}
+
+          {/* オーバーレイ：出力日（左上・現場名の下）*/}
+          <div style={{
+            position: 'absolute', top: siteName ? 48 : 12, left: 12, zIndex: 500,
+            background: 'rgba(255,255,255,0.85)', padding: '3px 8px',
+            borderRadius: 4, fontSize: 11, color: '#555',
+          }}>
+            出力日：{new Date().toLocaleDateString('ja-JP')}
+          </div>
+
+          {/* オーバーレイ：北矢印（右上）*/}
+          <div style={{
+            position: 'absolute', top: 12, right: 12, zIndex: 500,
+            background: 'rgba(255,255,255,0.9)', width: 40, height: 48,
+            borderRadius: 6, boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <div style={{ fontSize: 18, lineHeight: 1, color: '#c0392b' }}>▲</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#222' }}>N</div>
+          </div>
+        </div>
+
+        {/* 手動配置の案内バナー（撮影コンテナの外＝画像には写らない）*/}
         {pendingHead && (
           <div style={{
             position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
@@ -452,6 +528,40 @@ export function MapPage() {
               color: syncStatus.startsWith('✓') ? '#0F6E56' : syncStatus.startsWith('❌') ? '#c00' : '#777',
               fontWeight: syncStatus.startsWith('✓') ? 600 : 400,
             }}>{syncStatus}</div>
+          )}
+        </div>
+
+        {/* ===== C-1：出力（プレビュー画像生成）===== */}
+        <div style={{ marginTop: 16, padding: 12, background: 'white', border: '1px solid #e0e0e0', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>出力プレビュー</div>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>現場名</label>
+          <input
+            value={siteName}
+            onChange={e => setSiteName(e.target.value)}
+            placeholder="例：○○新築工事"
+            style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 13, border: '1px solid #ccc', borderRadius: 4, marginBottom: 8 }}
+          />
+          <button
+            onClick={capturePreview}
+            disabled={capturing}
+            style={{
+              width: '100%', padding: 10, fontSize: 14, fontWeight: 600,
+              background: capturing ? '#ccc' : '#1D9E75', color: 'white',
+              border: 'none', borderRadius: 6, cursor: capturing ? 'default' : 'pointer',
+            }}>
+            {capturing ? '⏳ 画像化中...' : '🖼 プレビュー画像を生成'}
+          </button>
+          {captureLog && (
+            <div style={{
+              fontSize: 11, marginTop: 6,
+              color: captureLog.startsWith('✓') ? '#0F6E56' : captureLog.startsWith('❌') ? '#c00' : '#777',
+            }}>{captureLog}</div>
+          )}
+          {previewUrl && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>生成された画像（C-2でPDF化）：</div>
+              <img src={previewUrl} alt="プレビュー" style={{ width: '100%', border: '1px solid #ddd', borderRadius: 4 }} />
+            </div>
           )}
         </div>
 
