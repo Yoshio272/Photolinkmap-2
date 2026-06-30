@@ -24,6 +24,7 @@ import { readExifGPS } from '../services/gps'
 import { getStorageProvider, createDefaultStorageConfig } from '../services/storage'
 import type { StorageConfig, StorageProviderType, StorageFile } from '../services/storage'
 import type { GoogleDriveProvider } from '../services/storage/GoogleDriveProvider'
+import { getPinPdfLinkUrl } from '../features/viewer/viewerTypes'
 
 // 地理院 航空写真タイル（APIキー不要・商用可）
 const GSI_PHOTO_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
@@ -39,7 +40,9 @@ interface MapPin {
   photoDataUrl: string  // ローカルプレビュー（B-2でクラウドリンクに発展）
   hasGps: boolean       // GPS由来か手動配置か
   comment: string       // B-1：コメント（意味の層）
-  cloudUrl?: string     // B-2：クラウド参照（外部の層）。B-1では未使用
+  cloudUrl?: string     // B-2：クラウド参照（外部の層）。360度はViewer URL、通常はviewUrl
+  is360: boolean        // 360度写真か（アスペクト比2:1で判定）
+  fileId?: string       // 同期時に取得するクラウドのファイルID
 }
 
 // 外部スクリプト/CSS動的ロード（package.json不変）
@@ -71,6 +74,20 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
+// 360度判定：画像のアスペクト比が2:1（equirectangular）かどうか
+// THETA・Insta360等はファイル名に360を含まないため、アスペクト比で判定する
+function detect360(dataUrl: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const img = new Image()
+    img.onload = () => {
+      const ratio = img.width / img.height
+      resolve(ratio >= 1.9 && ratio <= 2.1)
+    }
+    img.onerror = () => resolve(false)
+    img.src = dataUrl
+  })
+}
+
 // ポップアップ内HTMLのエスケープ（コメント・ファイル名に使う）
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({
@@ -84,7 +101,7 @@ export function MapPage() {
   const markersRef = useRef<Map<string, any>>(new globalThis.Map()) // pinId → L.marker
   const [libReady, setLibReady] = useState(false)
   const [pins, setPins] = useState<MapPin[]>([])
-  const [pendingManual, setPendingManual] = useState<{ fileName: string; photoDataUrl: string }[]>([])
+  const [pendingManual, setPendingManual] = useState<{ fileName: string; photoDataUrl: string; is360: boolean }[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const noCounterRef = useRef(0)
@@ -146,17 +163,25 @@ export function MapPage() {
   }, [])
 
   // ===== 番号付きピンアイコンを生成 =====
-  const makeIcon = useCallback((no: number, hasGps: boolean) => {
+  const makeIcon = useCallback((no: number, hasGps: boolean, is360: boolean) => {
     const L = (window as any).L
     const color = hasGps ? '#1D9E75' : '#E67E22' // GPS=緑, 手動=オレンジ
+    // 360度写真は枠を青系にして🌐バッジを付ける
+    const border = is360 ? '#2196F3' : 'white'
+    const badge = is360
+      ? `<div style="position:absolute;top:-6px;right:-6px;width:16px;height:16px;border-radius:50%;background:#2196F3;border:1.5px solid white;display:flex;align-items:center;justify-content:center;font-size:9px;">🌐</div>`
+      : ''
     return L.divIcon({
       className: 'map-pin-icon',
-      html: `<div style="
-        width:28px;height:28px;border-radius:50%;
-        background:${color};border:2px solid white;
-        box-shadow:0 1px 4px rgba(0,0,0,0.4);
-        display:flex;align-items:center;justify-content:center;
-        color:white;font-weight:bold;font-size:13px;font-family:sans-serif;">${no}</div>`,
+      html: `<div style="position:relative;">
+        <div style="
+          width:28px;height:28px;border-radius:50%;
+          background:${color};border:2px solid ${border};
+          box-shadow:0 1px 4px rgba(0,0,0,0.4);
+          display:flex;align-items:center;justify-content:center;
+          color:white;font-weight:bold;font-size:13px;font-family:sans-serif;">${no}</div>
+        ${badge}
+      </div>`,
       iconSize: [28, 28],
       iconAnchor: [14, 14],
     })
@@ -172,7 +197,7 @@ export function MapPage() {
     if (old) { map.removeLayer(old); markersRef.current.delete(pin.id) }
 
     const marker = L.marker([pin.lat, pin.lng], {
-      icon: makeIcon(pin.no, pin.hasGps),
+      icon: makeIcon(pin.no, pin.hasGps, pin.is360),
       draggable: true, // Leaflet標準ドラッグ
     }).addTo(map)
 
@@ -180,14 +205,16 @@ export function MapPage() {
     const commentHtml = pin.comment
       ? `<div style="margin-top:4px;font-size:12px;color:#333;white-space:pre-wrap;">${escapeHtml(pin.comment)}</div>`
       : `<div style="margin-top:4px;font-size:11px;color:#999;">コメントなし</div>`
+    const linkLabel = pin.is360 ? '🌐 360°ビューを開く' : '写真を開く'
     const linkHtml = pin.cloudUrl
       ? `<a href="${escapeHtml(pin.cloudUrl)}" target="_blank" rel="noopener" style="
-          display:inline-block;margin-top:6px;padding:4px 10px;background:#1D9E75;color:white;
-          border-radius:4px;font-size:12px;text-decoration:none;">写真を開く</a>`
+          display:inline-block;margin-top:6px;padding:4px 10px;background:${pin.is360 ? '#2196F3' : '#1D9E75'};color:white;
+          border-radius:4px;font-size:12px;text-decoration:none;">${linkLabel}</a>`
       : `<div style="margin-top:6px;font-size:11px;color:#bbb;">クラウド未同期</div>`
+    const title360 = pin.is360 ? ' <span style="font-size:10px;color:#2196F3;">🌐360°</span>' : ''
     marker.bindPopup(`
       <div style="font-family:sans-serif;min-width:140px;">
-        <div style="font-weight:bold;font-size:13px;">No.${pin.no}</div>
+        <div style="font-weight:bold;font-size:13px;">No.${pin.no}${title360}</div>
         <img src="${pin.photoDataUrl}" style="width:100%;max-height:120px;object-fit:cover;border-radius:4px;margin-top:4px;" />
         <div style="font-size:11px;color:#666;margin-top:4px;">${escapeHtml(pin.fileName)}</div>
         ${commentHtml}
@@ -226,6 +253,7 @@ export function MapPage() {
 
     for (const file of Array.from(files)) {
       const [gps, dataUrl] = await Promise.all([readExifGPS(file), fileToDataUrl(file)])
+      const is360 = await detect360(dataUrl)
       noCounterRef.current += 1
       const no = noCounterRef.current
       if (gps) {
@@ -233,12 +261,12 @@ export function MapPage() {
           id: `mp_${Date.now()}_${no}`, no,
           lat: gps.lat, lng: gps.lng,
           fileName: file.name, photoDataUrl: dataUrl, hasGps: true,
-          comment: '',
+          comment: '', is360,
         })
       } else {
         // GPS無し → 手動配置キューへ（番号は配置時に確定するので一旦戻す）
         noCounterRef.current -= 1
-        newManual.push({ fileName: file.name, photoDataUrl: dataUrl })
+        newManual.push({ fileName: file.name, photoDataUrl: dataUrl, is360 })
       }
     }
 
@@ -268,7 +296,7 @@ export function MapPage() {
         id: `mp_${Date.now()}_${no}`, no,
         lat: e.latlng.lat, lng: e.latlng.lng,
         fileName: pendingHead.fileName, photoDataUrl: pendingHead.photoDataUrl,
-        hasGps: false, comment: '',
+        hasGps: false, comment: '', is360: pendingHead.is360,
       }
       setPins(prev => [...prev, newPin])
       setPendingManual(prev => prev.slice(1)) // キューの先頭を消化
@@ -324,18 +352,49 @@ export function MapPage() {
       const fileMap: Record<string, StorageFile> = {}
       result.files.forEach(f => { fileMap[f.name.toLowerCase()] = f })
 
-      // マッチング集計を先に計算（setPinsの外で確定させる）
-      let matched = 0, unmatched = 0
-      const updatedPins = pins.map(pin => {
+      const isBox = storageConfig.provider === 'box'
+      const boxToken = isBox ? (localStorage.getItem('box_access_token') ?? '') : ''
+
+      // 各ピンをマッチング。360度はViewer URL生成（Boxは共有リンク取得も同期時に完結）
+      let matched = 0, unmatched = 0, linked360 = 0
+      const updatedPins: MapPin[] = []
+      for (const pin of pins) {
         const fn = pin.fileName.toLowerCase()
         const base = fn.replace(/\.[^.]+$/, '')
         const hit = fileMap[fn]
           ?? Object.values(fileMap).find(f => f.name.toLowerCase().replace(/\.[^.]+$/, '') === base)
-        if (hit) { matched++; return { ...pin, cloudUrl: hit.viewUrl } }
-        unmatched++; return pin
-      })
+        if (!hit) { unmatched++; updatedPins.push(pin); continue }
+        matched++
+
+        let cloudUrl: string
+        if (pin.is360) {
+          // 360度 → Viewer URL。Boxは共有リンクを取得して第三者閲覧可にする（同期時に確定）
+          let sharedUrl: string | undefined
+          if (isBox && boxToken) {
+            try {
+              const res = await fetch('/.netlify/functions/box-proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'create_shared_link', token: boxToken, fileId: hit.fileId }),
+              })
+              const data = await res.json() as { shared_link?: { download_url?: string } }
+              if (data.shared_link?.download_url) sharedUrl = data.shared_link.download_url
+            } catch { /* 共有リンク取得失敗時はsharedUrlなしで続行 */ }
+          }
+          cloudUrl = getPinPdfLinkUrl(
+            'photosphere', hit.fileId, hit.viewUrl, pin.fileName,
+            pin.lat, pin.lng, storageConfig.provider, sharedUrl,
+          )
+          linked360++
+        } else {
+          // 通常写真 → 閲覧URL
+          cloudUrl = hit.viewUrl
+        }
+        updatedPins.push({ ...pin, cloudUrl, fileId: hit.fileId })
+      }
       setPins(updatedPins)
-      setSyncStatus(`✓ ${result.files.length}件取得 / マッチ:${matched}件 / 未一致:${unmatched}件`)
+      const s360 = linked360 > 0 ? ` / 360°:${linked360}件` : ''
+      setSyncStatus(`✓ ${result.files.length}件取得 / マッチ:${matched}件 / 未一致:${unmatched}件${s360}`)
     } catch (e: unknown) {
       setSyncStatus('❌ ' + (e instanceof Error ? e.message : '接続エラー'))
     } finally {
@@ -723,7 +782,7 @@ export function MapPage() {
               <div style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {pin.fileName}
                 <div style={{ color: '#999' }}>
-                  {pin.hasGps ? 'GPS配置' : '手動配置'}{pin.comment ? '・コメント有' : ''}{pin.cloudUrl ? '・🔗' : ''}
+                  {pin.hasGps ? 'GPS配置' : '手動配置'}{pin.is360 ? '・🌐360°' : ''}{pin.comment ? '・コメント有' : ''}{pin.cloudUrl ? '・🔗' : ''}
                 </div>
               </div>
               <button onClick={e => { e.stopPropagation(); removePin(pin.id) }}
