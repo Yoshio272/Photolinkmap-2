@@ -113,6 +113,12 @@ export function MapPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [captureLog, setCaptureLog] = useState('')
+  // C-2：撮影時のピン画面座標と画像実寸（PDFリンク配置に使う）
+  const captureMetaRef = useRef<{
+    imgW: number; imgH: number
+    pins: { id: string; no: number; xRatio: number; yRatio: number; cloudUrl?: string }[]
+  } | null>(null)
+  const [exporting, setExporting] = useState(false)
 
   // 手動配置待ちキューの先頭（地図クリックで配置する対象）
   const pendingHead = pendingManual[0] ?? null
@@ -344,7 +350,8 @@ export function MapPage() {
   // ===== C-1：撮影コンテナをhtml2canvasで画像化 =====
   async function capturePreview() {
     const container = captureContainerRef.current
-    if (!container) return
+    const map = mapRef.current
+    if (!container || !map) return
     setCapturing(true)
     setCaptureLog('画像化中...')
     setPreviewUrl(null)
@@ -356,6 +363,19 @@ export function MapPage() {
       // タイル読込が落ち着くのを少し待つ
       await new Promise(r => setTimeout(r, 400))
 
+      // 撮影直前にピンの画面座標を記録（コンテナ基準の比率で保持）
+      const rect = container.getBoundingClientRect()
+      const pinMeta = pins.map(pin => {
+        // Leaflet：緯度経度 → コンテナ内ピクセル座標
+        const pt = map.latLngToContainerPoint([pin.lat, pin.lng])
+        return {
+          id: pin.id, no: pin.no,
+          xRatio: pt.x / rect.width,   // 0〜1（コンテナ幅に対する比率）
+          yRatio: pt.y / rect.height,  // 0〜1（コンテナ高に対する比率）
+          cloudUrl: pin.cloudUrl,
+        }
+      })
+
       const canvas: HTMLCanvasElement = await html2canvas(container, {
         useCORS: true,
         allowTaint: false,
@@ -365,12 +385,85 @@ export function MapPage() {
       })
       const url = canvas.toDataURL('image/png')
       setPreviewUrl(url)
-      // 簡易チェック：真っ白でないか（地図タイルが写ったか）の目安
-      setCaptureLog(`✓ 画像化成功（${canvas.width}×${canvas.height}px）`)
+      captureMetaRef.current = { imgW: canvas.width, imgH: canvas.height, pins: pinMeta }
+      const linked = pinMeta.filter(p => p.cloudUrl).length
+      setCaptureLog(`✓ 画像化成功（${canvas.width}×${canvas.height}px / リンク付きピン:${linked}件）`)
     } catch (e: unknown) {
       setCaptureLog('❌ ' + (e instanceof Error ? e.message : '画像化失敗'))
     } finally {
       setCapturing(false)
+    }
+  }
+
+  // ===== C-2：画像＋ピンリンク注釈をA3横PDF化 =====
+  async function exportPdf() {
+    if (!previewUrl || !captureMetaRef.current) {
+      setCaptureLog('先にプレビュー画像を生成してください')
+      return
+    }
+    setExporting(true)
+    try {
+      const { PDFDocument, PDFString, PDFName } = await import('pdf-lib')
+      const meta = captureMetaRef.current
+      const pngBytes = await fetch(previewUrl).then(r => r.arrayBuffer())
+      const pdf = await PDFDocument.create()
+      const png = await pdf.embedPng(pngBytes)
+
+      // A3横（842×1191pt の横向き = 1191×842）
+      const pageW = 1191, pageH = 842
+      const page = pdf.addPage([pageW, pageH])
+
+      // 画像をページ全面に収める（アスペクト比保持）
+      const margin = 20
+      const maxW = pageW - margin * 2
+      const maxH = pageH - margin * 2
+      const scale = Math.min(maxW / png.width, maxH / png.height)
+      const imgW = png.width * scale
+      const imgH = png.height * scale
+      const imgX = (pageW - imgW) / 2
+      const imgY = (pageH - imgH) / 2
+      page.drawImage(png, { x: imgX, y: imgY, width: imgW, height: imgH })
+
+      // 各ピンの位置にリンク注釈（透明・約40px相当のヒットエリア）
+      // 撮影時コンテナ幅に対する40pxの比率を、PDF上の画像幅に換算
+      const containerW = captureContainerRef.current?.getBoundingClientRect().width ?? meta.imgW
+      const hitRatio = 40 / containerW           // コンテナ上の40pxが画像幅に占める比率
+      const half = Math.max(hitRatio * imgW, 12) / 2
+      for (const p of meta.pins) {
+        if (!p.cloudUrl) continue
+        // 比率 → PDF座標。画像はimgX,imgYに配置、Y軸はPDFが下原点なので反転
+        const cx = imgX + p.xRatio * imgW
+        const cyTop = p.yRatio * imgH        // 画像上端からの距離
+        const cy = imgY + imgH - cyTop       // PDF座標（下原点）に変換
+        const annot = pdf.context.obj({
+          Type: 'Annot', Subtype: 'Link',
+          Rect: [cx - half, cy - half, cx + half, cy + half],
+          Border: [0, 0, 0],
+          A: { S: 'URI', URI: PDFString.of(p.cloudUrl) },
+        })
+        const ref = pdf.context.register(annot)
+        const existing = page.node.get(PDFName.of('Annots'))
+        if (existing && 'push' in existing) {
+          (existing as { push: (r: typeof ref) => void }).push(ref)
+        } else {
+          page.node.set(PDFName.of('Annots'), pdf.context.obj([ref]))
+        }
+      }
+
+      const bytes = await pdf.save()
+      const blob = new Blob([bytes instanceof Uint8Array ? bytes.buffer as ArrayBuffer : bytes], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${siteName || '現場位置図'}_位置図.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+      const linked = meta.pins.filter(p => p.cloudUrl).length
+      setCaptureLog(`✓ PDF出力完了（リンク付きピン:${linked}件）`)
+    } catch (e: unknown) {
+      setCaptureLog('❌ PDF生成エラー: ' + (e instanceof Error ? e.message : '失敗'))
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -559,8 +652,21 @@ export function MapPage() {
           )}
           {previewUrl && (
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>生成された画像（C-2でPDF化）：</div>
+              <div style={{ fontSize: 11, color: '#666', marginBottom: 4 }}>生成された画像：</div>
               <img src={previewUrl} alt="プレビュー" style={{ width: '100%', border: '1px solid #ddd', borderRadius: 4 }} />
+              <button
+                onClick={exportPdf}
+                disabled={exporting}
+                style={{
+                  width: '100%', marginTop: 8, padding: 10, fontSize: 14, fontWeight: 600,
+                  background: exporting ? '#ccc' : '#1565C0', color: 'white',
+                  border: 'none', borderRadius: 6, cursor: exporting ? 'default' : 'pointer',
+                }}>
+                {exporting ? '⏳ PDF生成中...' : '📄 リンク付きPDFを出力（A3横）'}
+              </button>
+              <div style={{ fontSize: 10, color: '#999', marginTop: 4, lineHeight: 1.5 }}>
+                ピン位置にクラウドへのリンクが埋め込まれます。クラウド未同期のピンはリンクなしになります。
+              </div>
             </div>
           )}
         </div>
