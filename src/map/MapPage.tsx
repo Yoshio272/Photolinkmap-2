@@ -33,9 +33,10 @@ interface MapPin {
   lat: number
   lng: number
   fileName: string
-  photoDataUrl: string  // ローカルプレビュー（Bでクラウドリンクに発展）
+  photoDataUrl: string  // ローカルプレビュー（B-2でクラウドリンクに発展）
   hasGps: boolean       // GPS由来か手動配置か
-  comment?: string      // Bで使用
+  comment: string       // B-1：コメント（意味の層）
+  cloudUrl?: string     // B-2：クラウド参照（外部の層）。B-1では未使用
 }
 
 // 外部スクリプト/CSS動的ロード（package.json不変）
@@ -67,6 +68,13 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
+// ポップアップ内HTMLのエスケープ（コメント・ファイル名に使う）
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c] || c))
+}
+
 export function MapPage() {
   const mapElRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
@@ -74,6 +82,7 @@ export function MapPage() {
   const [libReady, setLibReady] = useState(false)
   const [pins, setPins] = useState<MapPin[]>([])
   const [pendingManual, setPendingManual] = useState<{ fileName: string; photoDataUrl: string }[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const noCounterRef = useRef(0)
 
@@ -133,6 +142,22 @@ export function MapPage() {
       draggable: true, // Leaflet標準ドラッグ
     }).addTo(map)
 
+    // ポップアップ（No・写真・コメント表示。編集はサイドパネルで）
+    const commentHtml = pin.comment
+      ? `<div style="margin-top:4px;font-size:12px;color:#333;white-space:pre-wrap;">${escapeHtml(pin.comment)}</div>`
+      : `<div style="margin-top:4px;font-size:11px;color:#999;">コメントなし</div>`
+    marker.bindPopup(`
+      <div style="font-family:sans-serif;min-width:140px;">
+        <div style="font-weight:bold;font-size:13px;">No.${pin.no}</div>
+        <img src="${pin.photoDataUrl}" style="width:100%;max-height:120px;object-fit:cover;border-radius:4px;margin-top:4px;" />
+        <div style="font-size:11px;color:#666;margin-top:4px;">${escapeHtml(pin.fileName)}</div>
+        ${commentHtml}
+      </div>
+    `, { maxWidth: 200 })
+
+    // クリックで選択状態に（サイドパネルで編集できるよう）
+    marker.on('click', () => setSelectedId(pin.id))
+
     // ドラッグ終了で緯度経度を更新
     marker.on('dragend', () => {
       const ll = marker.getLatLng()
@@ -168,6 +193,7 @@ export function MapPage() {
           id: `mp_${Date.now()}_${no}`, no,
           lat: gps.lat, lng: gps.lng,
           fileName: file.name, photoDataUrl: dataUrl, hasGps: true,
+          comment: '',
         })
       } else {
         // GPS無し → 手動配置キューへ（番号は配置時に確定するので一旦戻す）
@@ -202,7 +228,7 @@ export function MapPage() {
         id: `mp_${Date.now()}_${no}`, no,
         lat: e.latlng.lat, lng: e.latlng.lng,
         fileName: pendingHead.fileName, photoDataUrl: pendingHead.photoDataUrl,
-        hasGps: false,
+        hasGps: false, comment: '',
       }
       setPins(prev => [...prev, newPin])
       setPendingManual(prev => prev.slice(1)) // キューの先頭を消化
@@ -213,7 +239,26 @@ export function MapPage() {
 
   function removePin(id: string) {
     setPins(prev => prev.filter(p => p.id !== id))
+    setSelectedId(prev => prev === id ? null : prev)
   }
+
+  function updateComment(id: string, comment: string) {
+    setPins(prev => prev.map(p => p.id === id ? { ...p, comment } : p))
+  }
+
+  // ピン選択時：地図をそのピンへ寄せてポップアップを開く
+  function focusPin(id: string) {
+    setSelectedId(id)
+    const marker = markersRef.current.get(id)
+    const map = mapRef.current
+    const pin = pins.find(p => p.id === id)
+    if (marker && map && pin) {
+      map.panTo([pin.lat, pin.lng])
+      marker.openPopup()
+    }
+  }
+
+  const selectedPin = pins.find(p => p.id === selectedId) ?? null
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
@@ -263,13 +308,48 @@ export function MapPage() {
           配置済み: {pins.length} 件
         </div>
 
-        <div style={{ marginTop: 8 }}>
+        {/* 選択中ピンの詳細＋コメント編集 */}
+        {selectedPin && (
+          <div style={{
+            marginTop: 10, padding: 12, background: 'white',
+            border: '2px solid #1D9E75', borderRadius: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{
+                minWidth: 24, height: 24, borderRadius: '50%',
+                background: selectedPin.hasGps ? '#1D9E75' : '#E67E22', color: 'white',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 12, fontWeight: 'bold',
+              }}>{selectedPin.no}</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>No.{selectedPin.no} の詳細</div>
+            </div>
+            <img src={selectedPin.photoDataUrl} alt="" style={{ width: '100%', maxHeight: 140, objectFit: 'cover', borderRadius: 4 }} />
+            <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>{selectedPin.fileName}</div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginTop: 8, marginBottom: 4 }}>コメント</label>
+            <textarea
+              value={selectedPin.comment}
+              onChange={e => updateComment(selectedPin.id, e.target.value)}
+              placeholder="例：外壁東面のひび割れ確認"
+              rows={3}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: 8, fontSize: 13,
+                border: '1px solid #ccc', borderRadius: 6, resize: 'vertical', fontFamily: 'sans-serif',
+              }}
+            />
+          </div>
+        )}
+
+        <div style={{ marginTop: 12 }}>
           {pins.map(pin => (
-            <div key={pin.id} style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: 8, marginBottom: 6, background: 'white',
-              border: '1px solid #eee', borderRadius: 6,
-            }}>
+            <div key={pin.id}
+              onClick={() => focusPin(pin.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: 8, marginBottom: 6,
+                background: pin.id === selectedId ? '#eafaf940' : 'white',
+                border: pin.id === selectedId ? '2px solid #1D9E75' : '1px solid #eee',
+                borderRadius: 6, cursor: 'pointer',
+              }}>
               <div style={{
                 minWidth: 24, height: 24, borderRadius: '50%',
                 background: pin.hasGps ? '#1D9E75' : '#E67E22', color: 'white',
@@ -279,9 +359,11 @@ export function MapPage() {
               <img src={pin.photoDataUrl} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }} />
               <div style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {pin.fileName}
-                <div style={{ color: '#999' }}>{pin.hasGps ? 'GPS配置' : '手動配置'}</div>
+                <div style={{ color: '#999' }}>
+                  {pin.hasGps ? 'GPS配置' : '手動配置'}{pin.comment ? '・コメント有' : ''}
+                </div>
               </div>
-              <button onClick={() => removePin(pin.id)}
+              <button onClick={e => { e.stopPropagation(); removePin(pin.id) }}
                 style={{ border: 'none', background: 'none', color: '#c00', cursor: 'pointer', fontSize: 16 }}>×</button>
             </div>
           ))}
