@@ -148,9 +148,12 @@ export function MapPage() {
       await loadScript('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
       if (cancelled || !mapElRef.current) return
       const L = (window as any).L
-      const map = L.map(mapElRef.current).setView([35.681236, 139.767125], 17)
+      const map = L.map(mapElRef.current, { maxZoom: 21 }).setView([35.681236, 139.767125], 18)
       L.tileLayer(GSI_PHOTO_URL, {
-        attribution: GSI_ATTR, maxZoom: 18, crossOrigin: 'anonymous',
+        attribution: GSI_ATTR,
+        maxNativeZoom: 18, // 実タイルは18が上限
+        maxZoom: 21,       // 18のタイルを引き伸ばして21まで拡大表示
+        crossOrigin: 'anonymous',
       }).addTo(map)
       L.control.scale({ imperial: false }).addTo(map)
       mapRef.current = map
@@ -277,7 +280,7 @@ export function MapPage() {
       const map = mapRef.current
       if (map && newGpsPins.length > 0) {
         const bounds = L.latLngBounds(newGpsPins.map(p => [p.lat, p.lng]))
-        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 18 })
+        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 20 })
       }
     }
     if (newManual.length > 0) setPendingManual(prev => [...prev, ...newManual])
@@ -579,7 +582,10 @@ export function MapPage() {
 
       {/* サイドパネル */}
       <div style={{ width: 320, padding: 16, borderLeft: '1px solid #ddd', overflow: 'auto', background: '#fafafa' }}>
-        <h2 style={{ fontSize: 18, marginTop: 0 }}>地図モード（撮影位置図）</h2>
+        <h2 style={{ fontSize: 18, marginTop: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>地図モード（撮影位置図）</span>
+          <a href="/" style={{ fontSize: 12, fontWeight: 600, color: '#1565C0', textDecoration: 'none' }}>← 図面モード</a>
+        </h2>
         <p style={{ fontSize: 13, color: '#555', lineHeight: 1.6 }}>
           写真を選ぶと、GPS情報から航空写真上に撮影位置が表示されます。
           GPSが無い写真は地図をクリックして配置します。
