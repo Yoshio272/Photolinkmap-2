@@ -72,18 +72,6 @@ export function PhotosTab({
           ? latLngToPx(gps.lat, gps.lng, calib.points)
           : null
 
-        // ===== DEBUG START =====
-        console.log('=== GPS配置トレース ===', {
-          '①gps': { lat: gps.lat, lng: gps.lng },
-          '②useCalib': useCalib,
-          '②calib.ready': calib.ready,
-          '②calib.points': JSON.parse(JSON.stringify(calib.points)),
-          '③converted': converted,
-          'pageW': pageW,
-          'pageH': pageH,
-        })
-        // ===== DEBUG END =====
-
         if (converted) {
           px = converted.x
           py = converted.y
@@ -92,8 +80,6 @@ export function PhotosTab({
           px = c.x
           py = c.y
         }
-
-        console.log('④pin保存値', { px, py, lat: gps.lat, lng: gps.lng })
 
         const pinType = is360 ? '360' as const : 'photo' as const
         const pinId = 'p' + Date.now() + '_' + i
