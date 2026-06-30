@@ -73,6 +73,13 @@ export function Toolbar({
         {/* ロゴ */}
         <span className="text-sm font-bold text-[#1565C0] mr-1">PhotoLinkMap</span>
 
+        {/* 地図モードへ */}
+        <a href="/map"
+          className="text-xs font-semibold px-2 py-1 rounded bg-[#1D9E75] text-white hover:bg-[#178a65] no-underline mr-1"
+          style={{ textDecoration: 'none' }}>
+          🗺 地図モード
+        </a>
+
         {/* GASバッジ */}
         <span className={`badge ${gasConfigured ? 'badge-green' : 'badge-warn'} text-xs`}>
           {gasConfigured ? '🔗 GAS接続済み' : '⚠ GAS未設定'}
