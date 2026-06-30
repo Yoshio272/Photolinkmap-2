@@ -147,14 +147,18 @@ export function MapPage() {
     imgW: number; imgH: number       // 元画像の実寸
     anchorLat: number; anchorLng: number  // 図面中心が対応する地図上の緯度経度
     baseZoom: number                 // 配置時の地図ズーム（scale補正の基準）
-    userScale: number                // ユーザー微調整スケール（C-3bで操作）
-    userRotation: number             // 回転角°（C-3bで操作）
+    baseFitScale: number             // 配置時の初期フィットスケール（100%の基準）
+    userScale: number                // ユーザー微調整スケール（baseFitScale基準の倍率）
+    userRotation: number             // 回転角°（-180〜180に正規化）
     opacity: number
   } | null>(null)
   const [overlayLoaded, setOverlayLoaded] = useState(false)
   const [overlayOpacity, setOverlayOpacity] = useState(50)  // %（UIと同期）
+  const [overlayRotation, setOverlayRotation] = useState(0) // 度（UIと同期、0.5刻み）
+  const [overlayScalePct, setOverlayScalePct] = useState(100) // %（ユーザー微調整スケール、UIと同期）
   const overlayFileInputRef = useRef<HTMLInputElement>(null)
   const [overlayLog, setOverlayLog] = useState('')
+  const [shiftHeld, setShiftHeld] = useState(false) // Shiftキー押下中（カーソル表示用）
 
   // 手動配置待ちキューの先頭（地図クリックで配置する対象）
   const pendingHead = pendingManual[0] ?? null
@@ -555,9 +559,9 @@ export function MapPage() {
     const pt = map.latLngToContainerPoint([st.anchorLat, st.anchorLng])
     // ズーム差からスケール補正（地図を拡大すると図面も拡大）
     const zoomScale = Math.pow(2, map.getZoom() - st.baseZoom)
-    const scale = zoomScale * st.userScale
+    // 実表示スケール = ズーム連動 × 初期フィット × ユーザー微調整
+    const scale = zoomScale * st.baseFitScale * st.userScale
     // 図面はアンカー（中心）基準で配置。transform-origin=center で回転・拡大の基準点を固定
-    // 要素の左上を、アンカー画面座標 - 半サイズ に置く
     el.style.left = `${pt.x}px`
     el.style.top = `${pt.y}px`
     el.style.transform =
@@ -605,17 +609,20 @@ export function MapPage() {
       // 初期配置：図面の中心を現在の地図中心に、図面が地図幅の約60%に収まる初期スケール
       const center = map.getCenter()
       const mapSize = map.getSize()
-      const initScale = (mapSize.x * 0.6) / w
+      const baseFitScale = (mapSize.x * 0.6) / w
       overlayStateRef.current = {
         dataUrl, imgW: w, imgH: h,
         anchorLat: center.lat, anchorLng: center.lng,
         baseZoom: map.getZoom(),
-        userScale: initScale,
+        baseFitScale,
+        userScale: 1,        // 100%
         userRotation: 0,
         opacity: overlayOpacity / 100,
       }
       setOverlayLoaded(true)
-      setOverlayLog('✓ 図面を配置しました。ドラッグで位置合わせできます')
+      setOverlayRotation(0)
+      setOverlayScalePct(100)
+      setOverlayLog('✓ 図面を配置しました。ドラッグで移動、Shift+ドラッグで回転できます')
       // 次フレームでtransform適用（DOM生成後）
       requestAnimationFrame(updateOverlayTransform)
     } catch (e: unknown) {
@@ -650,42 +657,78 @@ export function MapPage() {
     }
   }, [libReady, updateOverlayTransform])
 
-  // 図面オーバーレイのドラッグ（アンカー緯度経度を更新）
+  // 図面オーバーレイのドラッグ（移動 or Shift+回転）
   useEffect(() => {
     const el = overlayElRef.current
     const map = mapRef.current
     if (!el || !map || !overlayLoaded) return
 
-    let dragging = false
+    let mode: 'none' | 'move' | 'rotate' = 'none'
     let startX = 0, startY = 0
     let startAnchorPt = { x: 0, y: 0 }
+    // 回転用：開始時のマウス角度と、開始時の図面回転角
+    let startMouseAngle = 0
+    let startRotation = 0
+
+    // アンカー中心からの角度（度）を求める
+    const angleFromAnchor = (clientX: number, clientY: number): number => {
+      const st = overlayStateRef.current
+      if (!st) return 0
+      const rect = el.getBoundingClientRect()
+      // 要素の中心 = アンカー画面位置
+      const cx = rect.left + rect.width / 2
+      const cy = rect.top + rect.height / 2
+      return Math.atan2(clientY - cy, clientX - cx) * 180 / Math.PI
+    }
 
     const onPointerDown = (e: PointerEvent) => {
       const st = overlayStateRef.current
       if (!st) return
-      dragging = true
-      startX = e.clientX
-      startY = e.clientY
-      startAnchorPt = map.latLngToContainerPoint([st.anchorLat, st.anchorLng])
+      if (e.shiftKey) {
+        // 回転モード：開始角度を記録
+        mode = 'rotate'
+        startMouseAngle = angleFromAnchor(e.clientX, e.clientY)
+        startRotation = st.userRotation
+      } else {
+        // 移動モード
+        mode = 'move'
+        startX = e.clientX
+        startY = e.clientY
+        startAnchorPt = map.latLngToContainerPoint([st.anchorLat, st.anchorLng])
+      }
       el.setPointerCapture(e.pointerId)
       e.preventDefault()
       e.stopPropagation()
     }
+
     const onPointerMove = (e: PointerEvent) => {
-      if (!dragging) return
       const st = overlayStateRef.current
-      if (!st) return
-      const dx = e.clientX - startX
-      const dy = e.clientY - startY
-      // 新しいアンカー画面座標 → 緯度経度に逆変換
-      const newPt = { x: startAnchorPt.x + dx, y: startAnchorPt.y + dy }
-      const ll = map.containerPointToLatLng([newPt.x, newPt.y])
-      st.anchorLat = ll.lat
-      st.anchorLng = ll.lng
-      updateOverlayTransform()
+      if (!st || mode === 'none') return
+      if (mode === 'move') {
+        const dx = e.clientX - startX
+        const dy = e.clientY - startY
+        const newPt = { x: startAnchorPt.x + dx, y: startAnchorPt.y + dy }
+        const ll = map.containerPointToLatLng([newPt.x, newPt.y])
+        st.anchorLat = ll.lat
+        st.anchorLng = ll.lng
+        updateOverlayTransform()
+      } else if (mode === 'rotate') {
+        // 現在のマウス角度との差分を回転角に加算（連続角度で計算）
+        const currentAngle = angleFromAnchor(e.clientX, e.clientY)
+        let rot = startRotation + (currentAngle - startMouseAngle)
+        // -180〜180に正規化
+        while (rot > 180) rot -= 360
+        while (rot < -180) rot += 360
+        // 0.5°単位に丸めて適用
+        rot = Math.round(rot * 2) / 2
+        st.userRotation = rot
+        updateOverlayTransform()
+        setOverlayRotation(rot) // UI同期
+      }
     }
+
     const onPointerUp = (e: PointerEvent) => {
-      dragging = false
+      mode = 'none'
       try { el.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
     }
 
@@ -698,6 +741,50 @@ export function MapPage() {
       el.removeEventListener('pointerup', onPointerUp)
     }
   }, [overlayLoaded, updateOverlayTransform])
+
+  // Shiftキー押下状態を追跡（カーソル表示用）
+  useEffect(() => {
+    if (!overlayLoaded) return
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Shift') setShiftHeld(true) }
+    const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Shift') setShiftHeld(false) }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [overlayLoaded])
+
+  // 回転スライダー → state反映
+  useEffect(() => {
+    const st = overlayStateRef.current
+    if (st && st.userRotation !== overlayRotation) {
+      st.userRotation = overlayRotation
+      updateOverlayTransform()
+    }
+  }, [overlayRotation, updateOverlayTransform])
+
+  // スケールスライダー → state反映
+  useEffect(() => {
+    const st = overlayStateRef.current
+    if (st) {
+      st.userScale = overlayScalePct / 100
+      updateOverlayTransform()
+    }
+  }, [overlayScalePct, updateOverlayTransform])
+
+  // リセット（回転・スケール・透明度を初期化、位置は保持）
+  function resetOverlay() {
+    const st = overlayStateRef.current
+    if (!st) return
+    st.userRotation = 0
+    st.userScale = 1
+    st.opacity = 1
+    setOverlayRotation(0)
+    setOverlayScalePct(100)
+    setOverlayOpacity(100)
+    updateOverlayTransform()
+  }
 
   // 透明度スライダー → state反映
   useEffect(() => {
@@ -722,7 +809,7 @@ export function MapPage() {
                 width: overlayStateRef.current.imgW,
                 height: overlayStateRef.current.imgH,
                 zIndex: 400,            // 地図タイル(200)より上、Leafletマーカー(600)より下
-                cursor: 'move',
+                cursor: shiftHeld ? 'crosshair' : 'move',
                 pointerEvents: 'auto',
                 willChange: 'transform',
                 userSelect: 'none',
@@ -916,6 +1003,26 @@ export function MapPage() {
             <>
               <div style={{ marginBottom: 8 }}>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  スケール：{overlayScalePct}%
+                </label>
+                <input
+                  type="range" min={20} max={300} value={overlayScalePct}
+                  onChange={e => setOverlayScalePct(Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  回転：{overlayRotation.toFixed(1)}°
+                </label>
+                <input
+                  type="range" min={-180} max={180} step={0.5} value={overlayRotation}
+                  onChange={e => setOverlayRotation(Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
                   透明度：{overlayOpacity}%
                 </label>
                 <input
@@ -924,14 +1031,27 @@ export function MapPage() {
                   style={{ width: '100%' }}
                 />
               </div>
-              <button
-                onClick={removeOverlay}
-                style={{
-                  width: '100%', padding: 8, fontSize: 13, fontWeight: 600,
-                  background: '#fff', color: '#c00', border: '1px solid #e0a0a0', borderRadius: 6, cursor: 'pointer',
-                }}>
-                図面を削除
-              </button>
+              <div style={{ fontSize: 10, color: '#999', marginBottom: 8, lineHeight: 1.5 }}>
+                💡 図面をドラッグで移動、Shift+ドラッグで回転（0.5°単位）
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={resetOverlay}
+                  style={{
+                    flex: 1, padding: 8, fontSize: 12, fontWeight: 600,
+                    background: '#f0f0f0', color: '#555', border: '1px solid #ccc', borderRadius: 6, cursor: 'pointer',
+                  }}>
+                  リセット
+                </button>
+                <button
+                  onClick={removeOverlay}
+                  style={{
+                    flex: 1, padding: 8, fontSize: 12, fontWeight: 600,
+                    background: '#fff', color: '#c00', border: '1px solid #e0a0a0', borderRadius: 6, cursor: 'pointer',
+                  }}>
+                  図面を削除
+                </button>
+              </div>
             </>
           )}
           {overlayLog && (
