@@ -114,7 +114,7 @@ export function MapPocPage() {
         { x: margin, y: margin, size: 10 })
 
       const bytes = await pdf.save()
-      const blob = new Blob([bytes], { type: 'application/pdf' })
+      const blob = new Blob([bytes instanceof Uint8Array ? bytes.buffer as ArrayBuffer : bytes], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -141,8 +141,8 @@ export function MapPocPage() {
       const leafletImage = (window as any).leafletImage
       if (leafletImage) {
         const canvas: HTMLCanvasElement = await new Promise((resolve, reject) => {
-          leafletImage(map, (err: any, canvas: HTMLCanvasElement) => {
-            if (err) reject(err); else resolve(canvas)
+          leafletImage(map, (err: any, resultCanvas: HTMLCanvasElement) => {
+            if (err) reject(err); else resolve(resultCanvas)
           })
         })
         setCaptureMethod('leaflet-image')
