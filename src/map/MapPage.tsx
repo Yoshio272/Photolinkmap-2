@@ -795,9 +795,9 @@ export function MapPage() {
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       {/* 地図エリア */}
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         {/* 撮影コンテナ：地図＋オーバーレイ（これをhtml2canvasで撮る）*/}
-        <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
+        <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
           <div ref={mapElRef} style={{ width: '100%', height: '100%' }} />
 
           {/* C-3a：図面オーバーレイ（地図タイルの上、ピンより下）*/}
@@ -808,7 +808,7 @@ export function MapPage() {
                 position: 'absolute',
                 width: overlayStateRef.current.imgW,
                 height: overlayStateRef.current.imgH,
-                zIndex: 400,            // 地図タイル(200)より上、Leafletマーカー(600)より下
+                zIndex: 300,            // タイル(200)より上、Leafletマーカー(600)より下＝ピンが図面の上
                 cursor: shiftHeld ? 'crosshair' : 'move',
                 pointerEvents: 'auto',
                 willChange: 'transform',
@@ -873,7 +873,7 @@ export function MapPage() {
       </div>
 
       {/* サイドパネル */}
-      <div style={{ width: 320, padding: 16, borderLeft: '1px solid #ddd', overflow: 'auto', background: '#fafafa' }}>
+      <div style={{ width: 320, padding: 16, borderLeft: '1px solid #ddd', overflow: 'auto', background: '#fafafa', position: 'relative', zIndex: 5000 }}>
         <h2 style={{ fontSize: 18, marginTop: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>地図モード（撮影位置図）</span>
           <a href="/" style={{ fontSize: 12, fontWeight: 600, color: '#1565C0', textDecoration: 'none' }}>← 図面モード</a>
