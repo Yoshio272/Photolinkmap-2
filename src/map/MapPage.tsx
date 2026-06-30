@@ -577,8 +577,12 @@ export function MapPage() {
       // PDF → 1ページ目を画像化（既存PDF.js利用）
       const pdfjsLib = await import('pdfjs-dist')
       pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString()
+      // 日本語フォント等のため cMapUrl を指定（既存background.tsと同じ設定）
+      const cMapUrl = new URL('pdfjs-dist/cmaps/', import.meta.url).toString()
       const ab = await file.arrayBuffer()
-      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(ab) }).promise
+      const doc = await pdfjsLib.getDocument({
+        data: new Uint8Array(ab), cMapUrl, cMapPacked: true,
+      }).promise
       const page = await doc.getPage(1)
       const vp = page.getViewport({ scale: 2 })
       const canvas = document.createElement('canvas')
