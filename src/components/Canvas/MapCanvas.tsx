@@ -221,9 +221,6 @@ export const MapCanvas = forwardRef<HTMLCanvasElement, MapCanvasProps>(
     function PinSVG({ pin }: { pin: Pin }) {
       // Image座標 → Canvas座標
       const { x: cx, y: cy } = imageToCanvas(pin.px, pin.py, zoomScale)
-      if (pin.src === 'gps') {
-        console.log('⑤描画値', { id: pin.id, 'pin.px': pin.px, 'pin.py': pin.py, zoomScale, cx, cy, canvasW, canvasH })
-      }
       const r  = pin.r * zoomScale
       const al = pin.al * zoomScale
       const hasArrow = pin.deg !== NO_ARROW && al > 0
