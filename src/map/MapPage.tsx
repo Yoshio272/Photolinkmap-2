@@ -324,10 +324,6 @@ export function MapPage() {
       const fileMap: Record<string, StorageFile> = {}
       result.files.forEach(f => { fileMap[f.name.toLowerCase()] = f })
 
-      // デバッグ: 実際のファイル名を確認
-      console.log('[同期] クラウド側ファイル名(先頭5件):', result.files.slice(0, 5).map(f => f.name))
-      console.log('[同期] ピン側ファイル名:', pins.map(p => p.fileName))
-
       // マッチング集計を先に計算（setPinsの外で確定させる）
       let matched = 0, unmatched = 0
       const updatedPins = pins.map(pin => {
