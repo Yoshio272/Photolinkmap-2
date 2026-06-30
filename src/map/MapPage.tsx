@@ -137,6 +137,25 @@ export function MapPage() {
   } | null>(null)
   const [exporting, setExporting] = useState(false)
 
+  // ===== C-3a：図面オーバーレイ（半・地図連動モデル）=====
+  // 図面は独立DOMレイヤー。アンカー緯度経度を持ち、地図のpan/zoomに追従する。
+  const overlayElRef = useRef<HTMLDivElement>(null)   // 図面DOM要素
+  const overlayImgRef = useRef<HTMLImageElement | null>(null)
+  // 図面の状態（追従計算に必要な情報を最初から全部持つ）
+  const overlayStateRef = useRef<{
+    dataUrl: string
+    imgW: number; imgH: number       // 元画像の実寸
+    anchorLat: number; anchorLng: number  // 図面中心が対応する地図上の緯度経度
+    baseZoom: number                 // 配置時の地図ズーム（scale補正の基準）
+    userScale: number                // ユーザー微調整スケール（C-3bで操作）
+    userRotation: number             // 回転角°（C-3bで操作）
+    opacity: number
+  } | null>(null)
+  const [overlayLoaded, setOverlayLoaded] = useState(false)
+  const [overlayOpacity, setOverlayOpacity] = useState(50)  // %（UIと同期）
+  const overlayFileInputRef = useRef<HTMLInputElement>(null)
+  const [overlayLog, setOverlayLog] = useState('')
+
   // 手動配置待ちキューの先頭（地図クリックで配置する対象）
   const pendingHead = pendingManual[0] ?? null
 
@@ -525,6 +544,167 @@ export function MapPage() {
     }
   }
 
+  // ===== C-3a：図面オーバーレイ =====
+  // 図面レイヤーのtransformを地図の現在状態に合わせて更新（追従の心臓部）
+  const updateOverlayTransform = useCallback(() => {
+    const map = mapRef.current
+    const el = overlayElRef.current
+    const st = overlayStateRef.current
+    if (!map || !el || !st) return
+    // アンカー緯度経度 → 現在の画面ピクセル座標
+    const pt = map.latLngToContainerPoint([st.anchorLat, st.anchorLng])
+    // ズーム差からスケール補正（地図を拡大すると図面も拡大）
+    const zoomScale = Math.pow(2, map.getZoom() - st.baseZoom)
+    const scale = zoomScale * st.userScale
+    // 図面はアンカー（中心）基準で配置。transform-origin=center で回転・拡大の基準点を固定
+    // 要素の左上を、アンカー画面座標 - 半サイズ に置く
+    el.style.left = `${pt.x}px`
+    el.style.top = `${pt.y}px`
+    el.style.transform =
+      `translate(-50%, -50%) rotate(${st.userRotation}deg) scale(${scale})`
+    el.style.transformOrigin = 'center center'
+    el.style.opacity = String(st.opacity)
+  }, [])
+
+  // ファイル（PNG/JPG/PDF）→ 画像DataURLに統一
+  async function fileToOverlayImage(file: File): Promise<{ dataUrl: string; w: number; h: number }> {
+    const ext = file.name.toLowerCase()
+    if (ext.endsWith('.pdf')) {
+      // PDF → 1ページ目を画像化（既存PDF.js利用）
+      const pdfjsLib = await import('pdfjs-dist')
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString()
+      const ab = await file.arrayBuffer()
+      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(ab) }).promise
+      const page = await doc.getPage(1)
+      const vp = page.getViewport({ scale: 2 })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(vp.width)
+      canvas.height = Math.round(vp.height)
+      const ctx = canvas.getContext('2d')!
+      await page.render({ canvas, canvasContext: ctx, viewport: vp }).promise
+      return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height }
+    }
+    // PNG/JPG → そのまま
+    const dataUrl = await fileToDataUrl(file)
+    const dims = await new Promise<{ w: number; h: number }>((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+      img.onerror = () => resolve({ w: 800, h: 600 })
+      img.src = dataUrl
+    })
+    return { dataUrl, w: dims.w, h: dims.h }
+  }
+
+  async function handleOverlayFile(files: FileList | null) {
+    if (!files || !files[0]) return
+    const map = mapRef.current
+    if (!map) return
+    setOverlayLog('図面を読込中...')
+    try {
+      const { dataUrl, w, h } = await fileToOverlayImage(files[0])
+      // 初期配置：図面の中心を現在の地図中心に、図面が地図幅の約60%に収まる初期スケール
+      const center = map.getCenter()
+      const mapSize = map.getSize()
+      const initScale = (mapSize.x * 0.6) / w
+      overlayStateRef.current = {
+        dataUrl, imgW: w, imgH: h,
+        anchorLat: center.lat, anchorLng: center.lng,
+        baseZoom: map.getZoom(),
+        userScale: initScale,
+        userRotation: 0,
+        opacity: overlayOpacity / 100,
+      }
+      setOverlayLoaded(true)
+      setOverlayLog('✓ 図面を配置しました。ドラッグで位置合わせできます')
+      // 次フレームでtransform適用（DOM生成後）
+      requestAnimationFrame(updateOverlayTransform)
+    } catch (e: unknown) {
+      setOverlayLog('❌ ' + (e instanceof Error ? e.message : '読込失敗'))
+    }
+    if (overlayFileInputRef.current) overlayFileInputRef.current.value = ''
+  }
+
+  function removeOverlay() {
+    overlayStateRef.current = null
+    setOverlayLoaded(false)
+    setOverlayLog('')
+  }
+
+  // 地図のpan/zoomイベントで図面を追従させる
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !libReady) return
+    const update = () => updateOverlayTransform()
+    // start/move/end + zoom系を全て登録（将来の最適化拡張に備える）
+    map.on('move', update)
+    map.on('moveend', update)
+    map.on('zoom', update)
+    map.on('zoomend', update)
+    map.on('viewreset', update)
+    return () => {
+      map.off('move', update)
+      map.off('moveend', update)
+      map.off('zoom', update)
+      map.off('zoomend', update)
+      map.off('viewreset', update)
+    }
+  }, [libReady, updateOverlayTransform])
+
+  // 図面オーバーレイのドラッグ（アンカー緯度経度を更新）
+  useEffect(() => {
+    const el = overlayElRef.current
+    const map = mapRef.current
+    if (!el || !map || !overlayLoaded) return
+
+    let dragging = false
+    let startX = 0, startY = 0
+    let startAnchorPt = { x: 0, y: 0 }
+
+    const onPointerDown = (e: PointerEvent) => {
+      const st = overlayStateRef.current
+      if (!st) return
+      dragging = true
+      startX = e.clientX
+      startY = e.clientY
+      startAnchorPt = map.latLngToContainerPoint([st.anchorLat, st.anchorLng])
+      el.setPointerCapture(e.pointerId)
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragging) return
+      const st = overlayStateRef.current
+      if (!st) return
+      const dx = e.clientX - startX
+      const dy = e.clientY - startY
+      // 新しいアンカー画面座標 → 緯度経度に逆変換
+      const newPt = { x: startAnchorPt.x + dx, y: startAnchorPt.y + dy }
+      const ll = map.containerPointToLatLng([newPt.x, newPt.y])
+      st.anchorLat = ll.lat
+      st.anchorLng = ll.lng
+      updateOverlayTransform()
+    }
+    const onPointerUp = (e: PointerEvent) => {
+      dragging = false
+      try { el.releasePointerCapture(e.pointerId) } catch { /* ignore */ }
+    }
+
+    el.addEventListener('pointerdown', onPointerDown)
+    el.addEventListener('pointermove', onPointerMove)
+    el.addEventListener('pointerup', onPointerUp)
+    return () => {
+      el.removeEventListener('pointerdown', onPointerDown)
+      el.removeEventListener('pointermove', onPointerMove)
+      el.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [overlayLoaded, updateOverlayTransform])
+
+  // 透明度スライダー → state反映
+  useEffect(() => {
+    const st = overlayStateRef.current
+    if (st) { st.opacity = overlayOpacity / 100; updateOverlayTransform() }
+  }, [overlayOpacity, updateOverlayTransform])
+
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       {/* 地図エリア */}
@@ -532,6 +712,31 @@ export function MapPage() {
         {/* 撮影コンテナ：地図＋オーバーレイ（これをhtml2canvasで撮る）*/}
         <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
           <div ref={mapElRef} style={{ width: '100%', height: '100%' }} />
+
+          {/* C-3a：図面オーバーレイ（地図タイルの上、ピンより下）*/}
+          {overlayLoaded && overlayStateRef.current && (
+            <div
+              ref={overlayElRef}
+              style={{
+                position: 'absolute',
+                width: overlayStateRef.current.imgW,
+                height: overlayStateRef.current.imgH,
+                zIndex: 400,            // 地図タイル(200)より上、Leafletマーカー(600)より下
+                cursor: 'move',
+                pointerEvents: 'auto',
+                willChange: 'transform',
+                userSelect: 'none',
+              }}
+            >
+              <img
+                ref={overlayImgRef}
+                src={overlayStateRef.current.dataUrl}
+                alt="図面オーバーレイ"
+                draggable={false}
+                style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
+              />
+            </div>
+          )}
 
           {/* オーバーレイ：現場名（左上）*/}
           {siteName && (
@@ -682,6 +887,58 @@ export function MapPage() {
               color: syncStatus.startsWith('✓') ? '#0F6E56' : syncStatus.startsWith('❌') ? '#c00' : '#777',
               fontWeight: syncStatus.startsWith('✓') ? 600 : 400,
             }}>{syncStatus}</div>
+          )}
+        </div>
+
+        {/* ===== C-3a：図面オーバーレイ ===== */}
+        <div style={{ marginTop: 16, padding: 12, background: 'white', border: '1px solid #e0e0e0', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>図面オーバーレイ</div>
+          <div style={{ fontSize: 11, color: '#777', marginBottom: 8, lineHeight: 1.5 }}>
+            図面を航空写真に半透明で重ねます。読み込んだ後、図面をドラッグして位置を合わせてください。
+          </div>
+          <input
+            ref={overlayFileInputRef} type="file" accept="image/*,.pdf"
+            style={{ display: 'none' }}
+            onChange={e => handleOverlayFile(e.target.files)}
+          />
+          {!overlayLoaded ? (
+            <button
+              onClick={() => overlayFileInputRef.current?.click()}
+              disabled={!libReady}
+              style={{
+                width: '100%', padding: 10, fontSize: 14, fontWeight: 600,
+                background: libReady ? '#7E57C2' : '#ccc', color: 'white',
+                border: 'none', borderRadius: 6, cursor: libReady ? 'pointer' : 'default',
+              }}>
+              📐 図面を読み込む（PDF / 画像）
+            </button>
+          ) : (
+            <>
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  透明度：{overlayOpacity}%
+                </label>
+                <input
+                  type="range" min={0} max={100} value={overlayOpacity}
+                  onChange={e => setOverlayOpacity(Number(e.target.value))}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <button
+                onClick={removeOverlay}
+                style={{
+                  width: '100%', padding: 8, fontSize: 13, fontWeight: 600,
+                  background: '#fff', color: '#c00', border: '1px solid #e0a0a0', borderRadius: 6, cursor: 'pointer',
+                }}>
+                図面を削除
+              </button>
+            </>
+          )}
+          {overlayLog && (
+            <div style={{
+              fontSize: 11, marginTop: 6,
+              color: overlayLog.startsWith('✓') ? '#0F6E56' : overlayLog.startsWith('❌') ? '#c00' : '#777',
+            }}>{overlayLog}</div>
           )}
         </div>
 
