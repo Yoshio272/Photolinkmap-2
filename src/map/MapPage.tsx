@@ -21,6 +21,9 @@
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { readExifGPS } from '../services/gps'
+import { getStorageProvider, createDefaultStorageConfig } from '../services/storage'
+import type { StorageConfig, StorageProviderType, StorageFile } from '../services/storage'
+import type { GoogleDriveProvider } from '../services/storage/GoogleDriveProvider'
 
 // 地理院 航空写真タイル（APIキー不要・商用可）
 const GSI_PHOTO_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
@@ -86,6 +89,24 @@ export function MapPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const noCounterRef = useRef(0)
 
+  // ===== 地図モード独自のストレージ設定（既存アプリとは別管理。方式1）=====
+  // localStorageキーを既存と分けて独立性を保つ
+  const MAP_STORAGE_KEY = 'photolinkmap_map_storage_config'
+  const [storageConfig, setStorageConfig] = useState<StorageConfig>(() => {
+    try {
+      const saved = localStorage.getItem(MAP_STORAGE_KEY)
+      if (saved) return JSON.parse(saved) as StorageConfig
+    } catch { /* ignore */ }
+    return createDefaultStorageConfig()
+  })
+  // 設定変更を永続化
+  useEffect(() => {
+    try { localStorage.setItem(MAP_STORAGE_KEY, JSON.stringify(storageConfig)) } catch { /* ignore */ }
+  }, [storageConfig])
+
+  const [syncStatus, setSyncStatus] = useState('')
+  const [syncing, setSyncing] = useState(false)
+
   // 手動配置待ちキューの先頭（地図クリックで配置する対象）
   const pendingHead = pendingManual[0] ?? null
 
@@ -146,12 +167,18 @@ export function MapPage() {
     const commentHtml = pin.comment
       ? `<div style="margin-top:4px;font-size:12px;color:#333;white-space:pre-wrap;">${escapeHtml(pin.comment)}</div>`
       : `<div style="margin-top:4px;font-size:11px;color:#999;">コメントなし</div>`
+    const linkHtml = pin.cloudUrl
+      ? `<a href="${escapeHtml(pin.cloudUrl)}" target="_blank" rel="noopener" style="
+          display:inline-block;margin-top:6px;padding:4px 10px;background:#1D9E75;color:white;
+          border-radius:4px;font-size:12px;text-decoration:none;">写真を開く</a>`
+      : `<div style="margin-top:6px;font-size:11px;color:#bbb;">クラウド未同期</div>`
     marker.bindPopup(`
       <div style="font-family:sans-serif;min-width:140px;">
         <div style="font-weight:bold;font-size:13px;">No.${pin.no}</div>
         <img src="${pin.photoDataUrl}" style="width:100%;max-height:120px;object-fit:cover;border-radius:4px;margin-top:4px;" />
         <div style="font-size:11px;color:#666;margin-top:4px;">${escapeHtml(pin.fileName)}</div>
         ${commentHtml}
+        ${linkHtml}
       </div>
     `, { maxWidth: 200 })
 
@@ -260,6 +287,47 @@ export function MapPage() {
 
   const selectedPin = pins.find(p => p.id === selectedId) ?? null
 
+  // ===== クラウド同期（既存と同じ名前マッチング方式。両クラウド対応）=====
+  async function syncCloud() {
+    const provider = getStorageProvider(storageConfig.provider)
+    const err = provider.validateConfig(storageConfig)
+    if (err) { setSyncStatus('❌ ' + err); return }
+    if (pins.length === 0) { setSyncStatus('先に写真を配置してください'); return }
+
+    const folderId = storageConfig.provider === 'google-drive'
+      ? storageConfig.googleDrive.folderId
+      : (storageConfig.box.folderId ?? '')
+
+    setSyncing(true)
+    setSyncStatus('📂 クラウドのファイル一覧を取得中...')
+    try {
+      const result = await (provider as GoogleDriveProvider).listFiles(folderId, storageConfig)
+      if (!result.success || !result.files?.length) {
+        setSyncStatus('❌ ' + (result.error || 'ファイル取得失敗'))
+        setSyncing(false)
+        return
+      }
+      // ファイル名 → StorageFile のマップ
+      const fileMap: Record<string, StorageFile> = {}
+      result.files.forEach(f => { fileMap[f.name.toLowerCase()] = f })
+
+      let matched = 0, unmatched = 0
+      setPins(prev => prev.map(pin => {
+        const fn = pin.fileName.toLowerCase()
+        const base = fn.replace(/\.[^.]+$/, '')
+        const hit = fileMap[fn]
+          ?? Object.values(fileMap).find(f => f.name.toLowerCase().replace(/\.[^.]+$/, '') === base)
+        if (hit) { matched++; return { ...pin, cloudUrl: hit.viewUrl } }
+        unmatched++; return pin
+      }))
+      setSyncStatus(`✓ ${result.files.length}件取得 / マッチ:${matched}件 / 未一致:${unmatched}件`)
+    } catch (e: unknown) {
+      setSyncStatus('❌ ' + (e instanceof Error ? e.message : '接続エラー'))
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       {/* 地図 */}
@@ -303,6 +371,83 @@ export function MapPage() {
         >
           写真を選択
         </button>
+
+        {/* ===== クラウド同期（B-2）===== */}
+        <div style={{ marginTop: 16, padding: 12, background: 'white', border: '1px solid #e0e0e0', borderRadius: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>クラウド同期</div>
+          <div style={{ fontSize: 11, color: '#777', marginBottom: 8, lineHeight: 1.5 }}>
+            クラウドに保存済みの写真と、ファイル名で自動的にリンクを紐付けます。
+          </div>
+
+          {/* プロバイダ選択 */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+            {(['google-drive', 'box'] as StorageProviderType[]).map(p => (
+              <button key={p}
+                onClick={() => setStorageConfig({ ...storageConfig, provider: p })}
+                style={{
+                  flex: 1, padding: '6px', fontSize: 12, fontWeight: 600,
+                  background: storageConfig.provider === p ? '#1D9E75' : '#f0f0f0',
+                  color: storageConfig.provider === p ? 'white' : '#666',
+                  border: 'none', borderRadius: 6, cursor: 'pointer',
+                }}>
+                {p === 'google-drive' ? 'Google Drive' : 'Box'}
+              </button>
+            ))}
+          </div>
+
+          {/* Google Drive 設定 */}
+          {storageConfig.provider === 'google-drive' && (
+            <div style={{ marginBottom: 8 }}>
+              <input
+                placeholder="GAS WebApp URL"
+                value={storageConfig.googleDrive.webAppUrl}
+                onChange={e => setStorageConfig({ ...storageConfig, googleDrive: { ...storageConfig.googleDrive, webAppUrl: e.target.value } })}
+                style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 11, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4, marginBottom: 4 }}
+              />
+              <input
+                placeholder="DriveフォルダID"
+                value={storageConfig.googleDrive.folderId}
+                onChange={e => setStorageConfig({ ...storageConfig, googleDrive: { ...storageConfig.googleDrive, folderId: e.target.value } })}
+                style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 11, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4 }}
+              />
+            </div>
+          )}
+
+          {/* Box 設定 */}
+          {storageConfig.provider === 'box' && (
+            <div style={{ marginBottom: 8 }}>
+              <input
+                placeholder="BoxフォルダID"
+                value={storageConfig.box.folderId ?? ''}
+                onChange={e => setStorageConfig({ ...storageConfig, box: { ...storageConfig.box, folderId: e.target.value } })}
+                style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 11, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4 }}
+              />
+              <div style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
+                {localStorage.getItem('box_access_token') ? '🟢 Boxサインイン済み' : '⚪ 未サインイン（メインアプリでBoxログインが必要）'}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={syncCloud}
+            disabled={syncing || pins.length === 0}
+            style={{
+              width: '100%', padding: 8, fontSize: 13, fontWeight: 600,
+              background: (syncing || pins.length === 0) ? '#ccc' : '#E0F5EC',
+              color: (syncing || pins.length === 0) ? 'white' : '#0F6E56',
+              border: '1px solid #5DCAA5', borderRadius: 6,
+              cursor: (syncing || pins.length === 0) ? 'default' : 'pointer',
+            }}>
+            {syncing ? '⏳ 同期中...' : '🔄 クラウドと同期'}
+          </button>
+          {syncStatus && (
+            <div style={{
+              fontSize: 11, marginTop: 6,
+              color: syncStatus.startsWith('✓') ? '#0F6E56' : syncStatus.startsWith('❌') ? '#c00' : '#777',
+              fontWeight: syncStatus.startsWith('✓') ? 600 : 400,
+            }}>{syncStatus}</div>
+          )}
+        </div>
 
         <div style={{ marginTop: 16, fontSize: 13, fontWeight: 600 }}>
           配置済み: {pins.length} 件
@@ -360,7 +505,7 @@ export function MapPage() {
               <div style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {pin.fileName}
                 <div style={{ color: '#999' }}>
-                  {pin.hasGps ? 'GPS配置' : '手動配置'}{pin.comment ? '・コメント有' : ''}
+                  {pin.hasGps ? 'GPS配置' : '手動配置'}{pin.comment ? '・コメント有' : ''}{pin.cloudUrl ? '・🔗' : ''}
                 </div>
               </div>
               <button onClick={e => { e.stopPropagation(); removePin(pin.id) }}
