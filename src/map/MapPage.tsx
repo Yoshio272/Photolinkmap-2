@@ -565,7 +565,7 @@ export function MapPage() {
     el.style.left = `${pt.x}px`
     el.style.top = `${pt.y}px`
     el.style.transform =
-      `translate(-50%, -50%) rotate(${st.userRotation}deg) scale(${scale})`
+      `translate(-50%, -50%) translateZ(0) rotate(${st.userRotation}deg) scale(${scale})`
     el.style.transformOrigin = 'center center'
     el.style.opacity = String(st.opacity)
   }, [])
@@ -637,8 +637,12 @@ export function MapPage() {
       setOverlayRotation(0)
       setOverlayScalePct(100)
       setOverlayLog('✓ 図面を配置しました。ドラッグで移動、Shift+ドラッグで回転できます')
-      // 次フレームでtransform適用（DOM生成後）
-      requestAnimationFrame(updateOverlayTransform)
+      // DOM生成後、強制reflow + rAF2段で初回描画を確実化
+      requestAnimationFrame(() => {
+        const el = overlayElRef.current
+        if (el) void el.offsetHeight // 強制reflow
+        requestAnimationFrame(() => updateOverlayTransform())
+      })
     } catch (e: unknown) {
       setOverlayLog('❌ ' + (e instanceof Error ? e.message : '読込失敗'))
     }
@@ -826,6 +830,7 @@ export function MapPage() {
                 cursor: shiftHeld ? 'crosshair' : 'move',
                 pointerEvents: 'auto',
                 willChange: 'transform',
+                backfaceVisibility: 'hidden',
                 userSelect: 'none',
               }}
             >
@@ -834,6 +839,13 @@ export function MapPage() {
                 src={overlayStateRef.current.dataUrl}
                 alt="図面オーバーレイ"
                 draggable={false}
+                onLoad={() => {
+                  // 画像デコード完了後にtransform適用（初回paint確実化）
+                  // rAF2段でレイアウト確定を待つ
+                  requestAnimationFrame(() => {
+                    requestAnimationFrame(() => updateOverlayTransform())
+                  })
+                }}
                 style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
               />
             </div>
