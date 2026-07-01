@@ -171,14 +171,24 @@ export function MapPage() {
       await loadScript('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
       if (cancelled || !mapElRef.current) return
       const L = (window as any).L
-      const map = L.map(mapElRef.current, { maxZoom: 21 }).setView([35.681236, 139.767125], 18)
+      // zoomControl:false で標準の左上ズームを無効化し、右上に再配置（方位マークの下）
+      const map = L.map(mapElRef.current, { maxZoom: 21, zoomControl: false }).setView([35.681236, 139.767125], 18)
       L.tileLayer(GSI_PHOTO_URL, {
         attribution: GSI_ATTR,
         maxNativeZoom: 18, // 実タイルは18が上限
         maxZoom: 21,       // 18のタイルを引き伸ばして21まで拡大表示
         crossOrigin: 'anonymous',
       }).addTo(map)
+      L.control.zoom({ position: 'topright' }).addTo(map)
       L.control.scale({ imperial: false }).addTo(map)
+      // ズームコントロールを方位マーク（右上・高さ約60px）の下に押し下げる
+      const zoomStyleId = 'map-zoom-position-style'
+      if (!document.getElementById(zoomStyleId)) {
+        const style = document.createElement('style')
+        style.id = zoomStyleId
+        style.textContent = `.leaflet-top.leaflet-right .leaflet-control-zoom { margin-top: 66px; }`
+        document.head.appendChild(style)
+      }
       mapRef.current = map
       setLibReady(true)
     })()
