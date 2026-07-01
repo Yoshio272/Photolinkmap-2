@@ -589,13 +589,15 @@ export function MapPage() {
 
   // ===== C-3a：図面オーバーレイ =====
   // 図面レイヤーのtransformを地図の現在状態に合わせて更新（追従の心臓部）
+  // 図面はoverlayPane内に配置するため、layerPoint座標系で計算する
+  // （overlayPaneはLeafletがpan時にtransformで動かすので、layerPoint基準なら追従する）
   const updateOverlayTransform = useCallback(() => {
     const map = mapRef.current
     const el = overlayElRef.current
     const st = overlayStateRef.current
     if (!map || !el || !st) return
-    // アンカー緯度経度 → 現在の画面ピクセル座標
-    const pt = map.latLngToContainerPoint([st.anchorLat, st.anchorLng])
+    // アンカー緯度経度 → layerPoint（overlayPane基準の座標）
+    const pt = map.latLngToLayerPoint([st.anchorLat, st.anchorLng])
     // ズーム差からスケール補正（地図を拡大すると図面も拡大）
     const zoomScale = Math.pow(2, map.getZoom() - st.baseZoom)
     // 実表示スケール = ズーム連動 × 初期フィット × ユーザー微調整
@@ -843,6 +845,19 @@ export function MapPage() {
     setOverlayOpacity(100)
     updateOverlayTransform()
   }
+
+  // 図面divをLeafletのoverlayPaneに移動（タイルの上・マーカーの下＝ピンが常に最前面）
+  useEffect(() => {
+    const map = mapRef.current
+    const el = overlayElRef.current
+    if (!map || !el || !overlayLoaded) return
+    const overlayPane = map.getPanes().overlayPane
+    if (overlayPane && el.parentElement !== overlayPane) {
+      overlayPane.appendChild(el)
+      // 移動後に再計算（位置合わせ）
+      requestAnimationFrame(() => updateOverlayTransform())
+    }
+  }, [overlayLoaded, updateOverlayTransform])
 
   // 透明度スライダー → state反映
   useEffect(() => {
