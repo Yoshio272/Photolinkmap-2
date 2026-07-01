@@ -44,6 +44,9 @@ export function ImageViewerModal({ imageUrl, title, onClose }: Props) {
       try {
         const OpenSeadragon = await loadOpenSeadragon()
         if (cancelled || !containerRef.current) return
+        // コンテナのレイアウト確定を待つ（高さ0での初期化を防ぐ）
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+        if (cancelled || !containerRef.current) return
         // 通常画像は simple image 形式で表示（DZIタイル化なし・単一画像をOSDが扱う）
         const viewer = OpenSeadragon({
           element: containerRef.current,
@@ -58,7 +61,12 @@ export function ImageViewerModal({ imageUrl, title, onClose }: Props) {
           constrainDuringPan: true,
         })
         viewerRef.current = viewer
-        viewer.addHandler('open', () => { if (!cancelled) setStatus('ready') })
+        viewer.addHandler('open', () => {
+          if (cancelled) return
+          setStatus('ready')
+          // 画像を中央にフィット表示
+          try { viewer.viewport.goHome(true) } catch { /* ignore */ }
+        })
         viewer.addHandler('open-failed', () => {
           if (!cancelled) { setStatus('error'); setErrorMsg('画像の読み込みに失敗しました') }
         })
@@ -89,8 +97,8 @@ export function ImageViewerModal({ imageUrl, title, onClose }: Props) {
         }}>×</button>
       </div>
 
-      {/* OpenSeadragon コンテナ */}
-      <div ref={containerRef} style={{ position: 'absolute', inset: 0, top: 0 }} />
+      {/* OpenSeadragon コンテナ（ヘッダー48pxの下に確実に配置）*/}
+      <div ref={containerRef} style={{ position: 'absolute', top: 48, left: 0, right: 0, bottom: 0 }} />
 
       {status === 'loading' && (
         <div style={{
