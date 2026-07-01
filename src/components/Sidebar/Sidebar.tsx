@@ -64,7 +64,7 @@ export function Sidebar(props: SidebarProps) {
         ))}
       </div>
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-        {activeTab === 'settings'  && <SettingsTab  style={props.style} setStyle={props.setStyle} storageConfig={props.storageConfig} setStorageConfig={props.setStorageConfig} pdfLoaded={props.pdfLoaded} bgSource={props.bgSource} onBgLoaded={props.onBgLoaded} useCalib={props.useCalib} setUseCalib={props.setUseCalib} calib={props.calib} setCalib={props.setCalib} />}
+        {activeTab === 'settings'  && <SettingsTab  style={props.style} setStyle={props.setStyle} pdfLoaded={props.pdfLoaded} bgSource={props.bgSource} onBgLoaded={props.onBgLoaded} useCalib={props.useCalib} setUseCalib={props.setUseCalib} calib={props.calib} setCalib={props.setCalib} />}
         {activeTab === 'photos'    && <PhotosTab    {...props} pageW={props.pageW} pageH={props.pageH} onStartManualPlace={props.onStartManualPlace} mode={props.mode} photos={props.photos} dispatchPhotos={props.dispatchPhotos} />}
         {activeTab === 'sync'      && <SyncTab pins={props.pins} setPins={props.setPins} storageConfig={props.storageConfig} setStatusMsg={props.setStatusMsg} />}
         {activeTab === 'placement' && <PlacementTab {...props} onOpen360={props.onOpen360} />}

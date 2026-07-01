@@ -1,13 +1,11 @@
 import { useState, useRef } from 'react'
 import type { StyleConfig } from '../../types'
-import type { StorageConfig } from '../../services/storage'
 import type { BackgroundSource } from '../../services/background'
 import { loadBackgroundFile } from '../../services/background'
 import { parseLatLng } from '../../features/calibration/transform'
 
 interface Props {
   style: StyleConfig; setStyle: (s: StyleConfig) => void
-  storageConfig: StorageConfig; setStorageConfig: (c: StorageConfig) => void
   pdfLoaded: boolean
   bgSource: BackgroundSource | null
   onBgLoaded: (source: BackgroundSource) => void
@@ -24,7 +22,7 @@ const PIN_COLORS = [
 ]
 
 export function SettingsTab({
-  style, setStyle, storageConfig, setStorageConfig, pdfLoaded, onBgLoaded,
+  style, setStyle, pdfLoaded, onBgLoaded,
   useCalib, setUseCalib, calib, setCalib,
 }: Props) {
   const [bgLoading, setBgLoading] = useState(false)
