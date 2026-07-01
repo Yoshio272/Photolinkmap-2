@@ -9,6 +9,7 @@
  */
 import { useEffect, useState } from 'react'
 import { Viewer360Modal } from '../components/Viewer360/Viewer360Modal'
+import { ImageViewerModal } from './ImageViewerModal'
 
 interface FileInfo {
   id: string
@@ -49,7 +50,7 @@ export function ViewerPage() {
       setError('fileIdが設定されていません。\nDrive連携ボタンで写真リンクを取得してください。')
       return
     }
-    if (type !== 'photosphere') {
+    if (type !== 'photosphere' && type !== 'image') {
       setError(`ビューワー種別 "${type}" は未対応です。`)
       return
     }
@@ -178,6 +179,20 @@ export function ViewerPage() {
       })
   }, [phase])
 
+  // 本番モード: type=image は OpenSeadragon で表示
+  if (!debugMode && showPSV && imageUrl && type === 'image') {
+    return (
+      <ImageViewerModal
+        imageUrl={imageUrl}
+        title={title}
+        onClose={() => {
+          if (window.history.length > 1) window.history.back()
+          else window.close()
+        }}
+      />
+    )
+  }
+
   // 本番モード: PSV表示中またはロード中はデバッグUIを出さない
   if (!debugMode && showPSV && imageUrl) {
     return (
@@ -279,8 +294,15 @@ export function ViewerPage() {
         </div>
       </div>
 
-      {/* Phase 5: PSV モーダル */}
-      {showPSV && imageUrl && (
+      {/* Phase 5: ビューアモーダル（typeで分岐）*/}
+      {showPSV && imageUrl && type === 'image' && (
+        <ImageViewerModal
+          imageUrl={imageUrl}
+          title={title}
+          onClose={() => setShowPSV(false)}
+        />
+      )}
+      {showPSV && imageUrl && type !== 'image' && (
         <Viewer360Modal
           imageUrl={imageUrl}
           title={title}
