@@ -575,13 +575,20 @@ export function MapPage() {
     const ext = file.name.toLowerCase()
     if (ext.endsWith('.pdf')) {
       // PDF → 1ページ目を画像化（既存PDF.js利用）
+      // CAD系PDFはCIDフォントが壊れていることが多く、フォント処理で描画が落ちやすい。
+      // オーバーレイ用途では図面の線・形状が見えれば十分なので、フォント処理を堅牢化する。
       const pdfjsLib = await import('pdfjs-dist')
       pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString()
-      // 日本語フォント等のため cMapUrl を指定（既存background.tsと同じ設定）
       const cMapUrl = new URL('pdfjs-dist/cmaps/', import.meta.url).toString()
+      const standardFontDataUrl = new URL('pdfjs-dist/standard_fonts/', import.meta.url).toString()
       const ab = await file.arrayBuffer()
       const doc = await pdfjsLib.getDocument({
-        data: new Uint8Array(ab), cMapUrl, cMapPacked: true,
+        data: new Uint8Array(ab),
+        cMapUrl, cMapPacked: true,
+        standardFontDataUrl,
+        disableFontFace: true,   // フォントをcanvas描画にフォールバック（壊れたCIDフォント対策）
+        useSystemFonts: false,
+        stopAtErrors: false,     // 一部エラーでも描画を続ける
       }).promise
       const page = await doc.getPage(1)
       const vp = page.getViewport({ scale: 2 })
@@ -589,6 +596,9 @@ export function MapPage() {
       canvas.width = Math.round(vp.width)
       canvas.height = Math.round(vp.height)
       const ctx = canvas.getContext('2d')!
+      // 白背景を敷く（透明だと重ねたとき見えにくいため）
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
       await page.render({ canvas, canvasContext: ctx, viewport: vp }).promise
       return { dataUrl: canvas.toDataURL('image/png'), w: canvas.width, h: canvas.height }
     }
