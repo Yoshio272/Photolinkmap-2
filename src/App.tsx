@@ -246,6 +246,8 @@ export default function App() {
         onFit={handleFit}
         onSaveProject={handleSaveProject}
         onLoadProject={name => { const p = loadProjectFn(name); if (p) handleLoadProject(p) }}
+        storageConfig={storageConfig}
+        setStorageConfig={setStorageConfig}
       />
 
       {location.protocol === 'file:' && (
