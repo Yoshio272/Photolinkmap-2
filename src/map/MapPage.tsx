@@ -136,6 +136,8 @@ export function MapPage() {
     pins: { id: string; no: number; xRatio: number; yRatio: number; cloudUrl?: string }[]
   } | null>(null)
   const [exporting, setExporting] = useState(false)
+  // 自前の縮尺バー（Leaflet control非依存でPDFに確実に写す）
+  const [scaleBar, setScaleBar] = useState<{ label: string; widthPx: number } | null>(null)
 
   // ===== C-3a：図面オーバーレイ（半・地図連動モデル）=====
   // 図面は独立DOMレイヤー。アンカー緯度経度を持ち、地図のpan/zoomに追従する。
@@ -180,7 +182,7 @@ export function MapPage() {
         crossOrigin: 'anonymous',
       }).addTo(map)
       L.control.zoom({ position: 'topright' }).addTo(map)
-      L.control.scale({ imperial: false }).addTo(map)
+      // 縮尺バーはLeaflet controlを使わず自前DOMで描画（PDF再現性のため）
       // ズームコントロールを方位マーク（右上・高さ約60px）の下に押し下げる
       const zoomStyleId = 'map-zoom-position-style'
       if (!document.getElementById(zoomStyleId)) {
@@ -558,6 +560,33 @@ export function MapPage() {
     }
   }
 
+  // ===== 自前の縮尺バー計算（Leaflet control非依存）=====
+  // 画面上の実距離から、キリのいい距離に対応するバー長さ(px)を求める
+  const updateScaleBar = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    const size = map.getSize()
+    const y = size.y / 2
+    // 画面中央で水平100px離れた2点の実距離(m)
+    const p1 = map.containerPointToLatLng([0, y])
+    const p2 = map.containerPointToLatLng([100, y])
+    const metersPer100px = map.distance(p1, p2)
+    if (!isFinite(metersPer100px) || metersPer100px <= 0) return
+    const metersPerPx = metersPer100px / 100
+    // キリのいい距離候補から、60〜200pxに収まるものを選ぶ
+    const niceMeters = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+    let chosen = niceMeters[0]
+    for (const m of niceMeters) {
+      const px = m / metersPerPx
+      if (px >= 60 && px <= 200) { chosen = m; break }
+      if (px > 200) break
+      chosen = m
+    }
+    const widthPx = chosen / metersPerPx
+    const label = chosen >= 1000 ? `${chosen / 1000} km` : `${chosen} m`
+    setScaleBar({ label, widthPx })
+  }, [])
+
   // ===== C-3a：図面オーバーレイ =====
   // 図面レイヤーのtransformを地図の現在状態に合わせて更新（追従の心臓部）
   const updateOverlayTransform = useCallback(() => {
@@ -669,7 +698,8 @@ export function MapPage() {
   useEffect(() => {
     const map = mapRef.current
     if (!map || !libReady) return
-    const update = () => updateOverlayTransform()
+    const update = () => { updateOverlayTransform(); updateScaleBar() }
+    updateScaleBar() // 初回計算
     // start/move/end + zoom系を全て登録（将来の最適化拡張に備える）
     map.on('move', update)
     map.on('moveend', update)
@@ -683,7 +713,7 @@ export function MapPage() {
       map.off('zoomend', update)
       map.off('viewreset', update)
     }
-  }, [libReady, updateOverlayTransform])
+  }, [libReady, updateOverlayTransform, updateScaleBar])
 
   // 図面オーバーレイのドラッグ（移動 or Shift+回転）
   useEffect(() => {
@@ -909,6 +939,21 @@ export function MapPage() {
             <div style={{ fontSize: 18, lineHeight: 1, color: '#c0392b' }}>▲</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#222' }}>N</div>
           </div>
+
+          {/* オーバーレイ：自前縮尺バー（左下・Leaflet非依存でPDFに確実に写る）*/}
+          {scaleBar && (
+            <div style={{
+              position: 'absolute', bottom: 16, left: 12, zIndex: 500,
+              background: 'rgba(255,255,255,0.85)', padding: '3px 6px', borderRadius: 4,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: '#222', marginBottom: 2 }}>{scaleBar.label}</div>
+              <div style={{
+                width: scaleBar.widthPx, height: 6,
+                borderLeft: '2px solid #222', borderRight: '2px solid #222', borderBottom: '2px solid #222',
+              }} />
+            </div>
+          )}
         </div>
 
         {/* 手動配置の案内バナー（撮影コンテナの外＝画像には写らない）*/}
