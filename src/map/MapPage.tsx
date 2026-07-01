@@ -229,7 +229,7 @@ export function MapPage() {
         style.textContent = `.leaflet-top.leaflet-right .leaflet-control-zoom { margin-top: 66px; }
 .leaflet-control-attribution { margin-bottom: 13px !important; }
 body.pdf-capturing .map-pin-number-text { transform: translateY(-8px); }
-body.pdf-capturing .map-pin-badge { transform: translateY(-8px); }`
+body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         document.head.appendChild(style)
       }
       mapRef.current = map
@@ -248,7 +248,7 @@ body.pdf-capturing .map-pin-badge { transform: translateY(-8px); }`
     // 360度写真は枠を青系にして🌐バッジを付ける
     const border = is360 ? '#2196F3' : 'white'
     const badge = is360
-      ? `<div class="map-pin-badge" style="position:absolute;top:-6px;right:-6px;width:16px;height:16px;border-radius:50%;background:#2196F3;border:1.5px solid white;display:flex;align-items:center;justify-content:center;font-size:9px;">🌐</div>`
+      ? `<div class="map-pin-badge" style="position:absolute;top:-6px;right:-6px;width:16px;height:16px;border-radius:50%;background:#2196F3;border:1.5px solid white;display:flex;align-items:center;justify-content:center;font-size:9px;"><span class="map-pin-badge-text" style="display:inline-block;">🌐</span></div>`
       : ''
     return L.divIcon({
       className: 'map-pin-icon',
