@@ -20,6 +20,7 @@
  * 認証情報のみ将来共有。EXIF抽出は既存 services/gps.ts を流用。
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
+import type { CSSProperties } from 'react'
 import { readExifGPS } from '../services/gps'
 import { getStorageProvider, createDefaultStorageConfig } from '../services/storage'
 import type { StorageConfig, StorageProviderType, StorageFile } from '../services/storage'
@@ -29,6 +30,21 @@ import { getPinPdfLinkUrl } from '../features/viewer/viewerTypes'
 // 地理院 航空写真タイル（APIキー不要・商用可）
 const GSI_PHOTO_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
 const GSI_ATTR = "出典：<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank' rel='noopener'>国土地理院</a>"
+
+// 地図タイルの種類（すべて国土地理院・APIキー不要）
+type BaseMapKey = 'photo' | 'std' | 'pale'
+interface BaseMapDef { key: BaseMapKey; label: string; url: string; maxNativeZoom: number }
+const BASE_MAPS: BaseMapDef[] = [
+  { key: 'photo', label: '航空写真', url: GSI_PHOTO_URL, maxNativeZoom: 18 },
+  { key: 'std',   label: '標準地図', url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',  maxNativeZoom: 18 },
+  { key: 'pale',  label: '淡色地図', url: 'https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png', maxNativeZoom: 18 },
+]
+
+// ヘッダーの未実装ボタン（地図モードでは保存系が未対応のためグレーアウト表示）
+const disabledBtnStyle: CSSProperties = {
+  fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
+  border: '1px solid #e5e7eb', background: '#f3f4f6', color: '#9ca3af', cursor: 'not-allowed',
+}
 
 // 地図モード専用：通常写真をOpenSeadragonで開く /viewer?type=image URLを組み立てる
 // （共通関数 getPinPdfLinkUrl は変更せず、表示先の切替を地図モードに閉じ込める）
@@ -117,6 +133,8 @@ export function MapPage() {
   const mapElRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const markersRef = useRef<Map<string, any>>(new globalThis.Map()) // pinId → L.marker
+  const tileLayerRef = useRef<any>(null)                 // 現在のベースマップタイルレイヤー
+  const [baseMap, setBaseMap] = useState<BaseMapKey>('photo') // 選択中の地図種類
   const [libReady, setLibReady] = useState(false)
   const [pins, setPins] = useState<MapPin[]>([])
   const [pendingManual, setPendingManual] = useState<{ fileName: string; photoDataUrl: string; is360: boolean }[]>([])
@@ -193,10 +211,11 @@ export function MapPage() {
       const L = (window as any).L
       // zoomControl:false で標準の左上ズームを無効化し、右上に再配置（方位マークの下）
       const map = L.map(mapElRef.current, { maxZoom: 21, zoomControl: false }).setView([35.681236, 139.767125], 18)
-      L.tileLayer(GSI_PHOTO_URL, {
+      const initialDef = BASE_MAPS.find(b => b.key === 'photo')!
+      tileLayerRef.current = L.tileLayer(initialDef.url, {
         attribution: GSI_ATTR,
-        maxNativeZoom: 18, // 実タイルは18が上限
-        maxZoom: 21,       // 18のタイルを引き伸ばして21まで拡大表示
+        maxNativeZoom: initialDef.maxNativeZoom, // 実タイルの上限
+        maxZoom: 21,       // タイルを引き伸ばして21まで拡大表示
         crossOrigin: 'anonymous',
       }).addTo(map)
       L.control.zoom({ position: 'topright' }).addTo(map)
@@ -581,6 +600,25 @@ export function MapPage() {
     }
   }
 
+  // ===== 地図タイルの切り替え（航空写真／標準地図／淡色地図）=====
+  const switchBaseMap = useCallback((key: BaseMapKey) => {
+    const map = mapRef.current
+    const L = (window as any).L
+    if (!map || !L) return
+    const def = BASE_MAPS.find(b => b.key === key)
+    if (!def) return
+    // 既存タイルを外して新タイルを最背面に追加
+    if (tileLayerRef.current) map.removeLayer(tileLayerRef.current)
+    tileLayerRef.current = L.tileLayer(def.url, {
+      attribution: GSI_ATTR,
+      maxNativeZoom: def.maxNativeZoom,
+      maxZoom: 21,
+      crossOrigin: 'anonymous',
+    }).addTo(map)
+    tileLayerRef.current.bringToBack()
+    setBaseMap(key)
+  }, [])
+
   // ===== 自前の縮尺バー計算（Leaflet control非依存）=====
   // 画面上の実距離から、キリのいい距離に対応するバー長さ(px)を求める
   const updateScaleBar = useCallback(() => {
@@ -907,7 +945,48 @@ export function MapPage() {
   }, [overlayLoaded])
 
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'sans-serif' }}>
+      {/* ===== ヘッダー（図面モードと同じ見た目・案B）===== */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px',
+        background: 'white', borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+        flexWrap: 'wrap', flexShrink: 0,
+      }}>
+        {/* ロゴ */}
+        <span style={{ fontSize: 14, fontWeight: 700, color: '#1565C0', marginRight: 4 }}>PhotoLinkMap</span>
+
+        {/* 図面モードへ */}
+        <a href="/" style={{
+          fontSize: 12, fontWeight: 600, padding: '4px 8px', borderRadius: 4,
+          background: '#1565C0', color: 'white', textDecoration: 'none', marginRight: 4,
+        }}>📐 図面モード</a>
+
+        {/* 地図種類の切り替え */}
+        <div style={{ display: 'inline-flex', border: '1px solid #d1d5db', borderRadius: 6, overflow: 'hidden', marginRight: 4 }}>
+          {BASE_MAPS.map((b, i) => (
+            <button key={b.key} onClick={() => switchBaseMap(b.key)}
+              style={{
+                fontSize: 12, fontWeight: 600, padding: '4px 10px', border: 'none', cursor: 'pointer',
+                borderLeft: i === 0 ? 'none' : '1px solid #d1d5db',
+                background: baseMap === b.key ? '#1D9E75' : 'white',
+                color: baseMap === b.key ? 'white' : '#374151',
+              }}>
+              {b.label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
+
+        {/* 保存系（地図モードでは未実装のためグレーアウト）*/}
+        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>💾 上書き保存</button>
+        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>📋 別名保存</button>
+        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>📂 管理</button>
+        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>新規プロジェクト</button>
+      </div>
+
+      {/* ===== 本体（地図エリア＋サイドバー）===== */}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
       {/* 地図エリア */}
       <div style={{ flex: 1, position: 'relative' }}>
         {/* 撮影コンテナ：地図＋オーバーレイ（これをhtml2canvasで撮る）*/}
@@ -1310,6 +1389,7 @@ export function MapPage() {
             </div>
           ))}
         </div>
+      </div>
       </div>
     </div>
   )
