@@ -4,7 +4,6 @@ import type { StorageConfig } from '../../services/storage'
 import type { BackgroundSource } from '../../services/background'
 import { loadBackgroundFile } from '../../services/background'
 import { parseLatLng } from '../../features/calibration/transform'
-import { StorageSettingsPanel } from '../Storage/StorageSettingsPanel'
 
 interface Props {
   style: StyleConfig; setStyle: (s: StyleConfig) => void
@@ -95,8 +94,6 @@ export function SettingsTab({
           onChange={e => setStyle({ ...style, arrowLength: Number(e.target.value) })} />
       </div>
 
-      {/* ストレージ設定（共通コンポーネントに移設。実装は StorageSettingsPanel に一元化）*/}
-      <StorageSettingsPanel storageConfig={storageConfig} setStorageConfig={setStorageConfig} />
     </div>
   )
 }
