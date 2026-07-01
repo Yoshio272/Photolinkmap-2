@@ -226,7 +226,8 @@ export function MapPage() {
       if (!document.getElementById(zoomStyleId)) {
         const style = document.createElement('style')
         style.id = zoomStyleId
-        style.textContent = `.leaflet-top.leaflet-right .leaflet-control-zoom { margin-top: 66px; }`
+        style.textContent = `.leaflet-top.leaflet-right .leaflet-control-zoom { margin-top: 66px; }
+.leaflet-control-attribution { margin-bottom: 13px !important; }`
         document.head.appendChild(style)
       }
       mapRef.current = map
@@ -255,7 +256,7 @@ export function MapPage() {
           background:${color};border:2px solid ${border};
           box-shadow:0 1px 4px rgba(0,0,0,0.4);
           display:flex;align-items:center;justify-content:center;line-height:1;
-          color:white;font-weight:bold;font-size:13px;font-family:sans-serif;">${no}</div>
+          color:white;font-weight:bold;font-size:13px;font-family:sans-serif;"><span style="display:inline-block;transform:translateY(-13px);">${no}</span></div>
         ${badge}
       </div>`,
       iconSize: [28, 28],
