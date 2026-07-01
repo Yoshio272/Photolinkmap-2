@@ -135,6 +135,7 @@ export function MapPage() {
   const markersRef = useRef<Map<string, any>>(new globalThis.Map()) // pinId → L.marker
   const tileLayerRef = useRef<any>(null)                 // 現在のベースマップタイルレイヤー
   const [baseMap, setBaseMap] = useState<BaseMapKey>('photo') // 選択中の地図種類
+  const [showStorageSettings, setShowStorageSettings] = useState(false) // ストレージ設定モーダル
   const [libReady, setLibReady] = useState(false)
   const [pins, setPins] = useState<MapPin[]>([])
   const [pendingManual, setPendingManual] = useState<{ fileName: string; photoDataUrl: string; is360: boolean }[]>([])
@@ -978,6 +979,14 @@ export function MapPage() {
 
         <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
 
+        {/* 保存先設定（Google Drive / Box の接続設定モーダルを開く）*/}
+        <button onClick={() => setShowStorageSettings(true)} style={{
+          fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
+          border: '1px solid #1D9E75', background: 'white', color: '#0F6E56', cursor: 'pointer',
+        }}>📁 保存先設定</button>
+
+        <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
+
         {/* 保存系（地図モードでは未実装のためグレーアウト）*/}
         <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>💾 上書き保存</button>
         <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>📋 別名保存</button>
@@ -1089,9 +1098,8 @@ export function MapPage() {
 
       {/* サイドパネル */}
       <div style={{ width: 320, padding: 16, borderLeft: '1px solid #ddd', overflow: 'auto', background: '#fafafa', position: 'relative', zIndex: 5000 }}>
-        <h2 style={{ fontSize: 18, marginTop: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>地図モード（撮影位置図）</span>
-          <a href="/" style={{ fontSize: 12, fontWeight: 600, color: '#1565C0', textDecoration: 'none' }}>← 図面モード</a>
+        <h2 style={{ fontSize: 18, marginTop: 0 }}>
+          地図モード（撮影位置図）
         </h2>
         <p style={{ fontSize: 13, color: '#555', lineHeight: 1.6 }}>
           写真を選ぶと、GPS情報から航空写真上に撮影位置が表示されます。
@@ -1115,38 +1123,22 @@ export function MapPage() {
           写真を選択
         </button>
 
-        {/* ===== クラウド同期（B-2）===== */}
+        {/* ===== クラウド同期（B-2）：フォルダIDと同期ボタン。接続設定はヘッダーの「保存先設定」へ ===== */}
         <div style={{ marginTop: 16, padding: 12, background: 'white', border: '1px solid #e0e0e0', borderRadius: 8 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>クラウド同期</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>クラウド同期</div>
+            <span style={{ fontSize: 11, color: '#0F6E56', fontWeight: 600 }}>
+              {storageConfig.provider === 'google-drive' ? 'Google Drive' : 'Box'}
+            </span>
+          </div>
           <div style={{ fontSize: 11, color: '#777', marginBottom: 8, lineHeight: 1.5 }}>
-            クラウドに保存済みの写真と、ファイル名で自動的にリンクを紐付けます。
+            クラウドに保存済みの写真と、ファイル名で自動的にリンクを紐付けます。接続設定はヘッダーの「📁 保存先設定」から。
           </div>
 
-          {/* プロバイダ選択 */}
-          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-            {(['google-drive', 'box'] as StorageProviderType[]).map(p => (
-              <button key={p}
-                onClick={() => setStorageConfig({ ...storageConfig, provider: p })}
-                style={{
-                  flex: 1, padding: '6px', fontSize: 12, fontWeight: 600,
-                  background: storageConfig.provider === p ? '#1D9E75' : '#f0f0f0',
-                  color: storageConfig.provider === p ? 'white' : '#666',
-                  border: 'none', borderRadius: 6, cursor: 'pointer',
-                }}>
-                {p === 'google-drive' ? 'Google Drive' : 'Box'}
-              </button>
-            ))}
-          </div>
-
-          {/* Google Drive 設定 */}
-          {storageConfig.provider === 'google-drive' && (
+          {/* ルートフォルダID（現場ごとに変えるのでサイドバーに残す）*/}
+          {storageConfig.provider === 'google-drive' ? (
             <div style={{ marginBottom: 8 }}>
-              <input
-                placeholder="GAS WebApp URL"
-                value={storageConfig.googleDrive.webAppUrl}
-                onChange={e => setStorageConfig({ ...storageConfig, googleDrive: { ...storageConfig.googleDrive, webAppUrl: e.target.value } })}
-                style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 11, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4, marginBottom: 4 }}
-              />
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 4, color: '#555' }}>DriveフォルダID</label>
               <input
                 placeholder="DriveフォルダID"
                 value={storageConfig.googleDrive.folderId}
@@ -1154,11 +1146,9 @@ export function MapPage() {
                 style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 11, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4 }}
               />
             </div>
-          )}
-
-          {/* Box 設定 */}
-          {storageConfig.provider === 'box' && (
+          ) : (
             <div style={{ marginBottom: 8 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, marginBottom: 4, color: '#555' }}>BoxフォルダID</label>
               <input
                 placeholder="BoxフォルダID"
                 value={storageConfig.box.folderId ?? ''}
@@ -1166,7 +1156,7 @@ export function MapPage() {
                 style={{ width: '100%', boxSizing: 'border-box', padding: 6, fontSize: 11, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4 }}
               />
               <div style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
-                {localStorage.getItem('box_access_token') ? '🟢 Boxサインイン済み' : '⚪ 未サインイン（メインアプリでBoxログインが必要）'}
+                {localStorage.getItem('box_access_token') ? '🟢 Boxサインイン済み' : '⚪ 未サインイン（保存先設定でBoxログインが必要）'}
               </div>
             </div>
           )}
@@ -1391,6 +1381,91 @@ export function MapPage() {
         </div>
       </div>
       </div>
+
+      {/* ===== ストレージ保存先設定モーダル ===== */}
+      {showStorageSettings && (
+        <div
+          onClick={() => setShowStorageSettings(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'white', borderRadius: 10, padding: 20, width: 420, maxWidth: '90vw',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.25)', maxHeight: '85vh', overflow: 'auto',
+            }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>📁 保存先設定</h3>
+              <button onClick={() => setShowStorageSettings(false)}
+                style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#666', lineHeight: 1 }}>×</button>
+            </div>
+            <p style={{ fontSize: 12, color: '#777', marginTop: 0, marginBottom: 16, lineHeight: 1.6 }}>
+              写真を保管しているクラウドを選び、接続情報を設定します。フォルダIDと同期は右側のパネルで行います。
+            </p>
+
+            {/* プロバイダ選択 */}
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 6, color: '#333' }}>クラウドの種類</label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              {(['google-drive', 'box'] as StorageProviderType[]).map(p => (
+                <button key={p}
+                  onClick={() => setStorageConfig({ ...storageConfig, provider: p })}
+                  style={{
+                    flex: 1, padding: '10px', fontSize: 13, fontWeight: 600,
+                    background: storageConfig.provider === p ? '#1D9E75' : '#f0f0f0',
+                    color: storageConfig.provider === p ? 'white' : '#666',
+                    border: 'none', borderRadius: 6, cursor: 'pointer',
+                  }}>
+                  {p === 'google-drive' ? 'Google Drive' : 'Box'}
+                </button>
+              ))}
+            </div>
+
+            {/* Google Drive 接続設定 */}
+            {storageConfig.provider === 'google-drive' && (
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: '#333' }}>GAS WebApp URL</label>
+                <input
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  value={storageConfig.googleDrive.webAppUrl}
+                  onChange={e => setStorageConfig({ ...storageConfig, googleDrive: { ...storageConfig.googleDrive, webAppUrl: e.target.value } })}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: 8, fontSize: 12, fontFamily: 'monospace', border: '1px solid #ccc', borderRadius: 4 }}
+                />
+                <div style={{ fontSize: 11, color: '#999', marginTop: 6, lineHeight: 1.5 }}>
+                  Google Apps Script で公開したWebアプリのURLを入力してください。
+                </div>
+              </div>
+            )}
+
+            {/* Box 接続設定 */}
+            {storageConfig.provider === 'box' && (
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4, color: '#333' }}>Box 接続状態</label>
+                <div style={{
+                  padding: 10, fontSize: 13, borderRadius: 6,
+                  background: localStorage.getItem('box_access_token') ? '#E0F5EC' : '#f3f4f6',
+                  color: localStorage.getItem('box_access_token') ? '#0F6E56' : '#666',
+                  fontWeight: 600,
+                }}>
+                  {localStorage.getItem('box_access_token') ? '🟢 Boxサインイン済み' : '⚪ 未サインイン'}
+                </div>
+                <div style={{ fontSize: 11, color: '#999', marginTop: 6, lineHeight: 1.5 }}>
+                  Boxのサインインは図面モードの設定から行えます。サインイン後、こちらに反映されます。
+                </div>
+              </div>
+            )}
+
+            <button onClick={() => setShowStorageSettings(false)}
+              style={{
+                width: '100%', marginTop: 20, padding: 10, fontSize: 14, fontWeight: 600,
+                background: '#1D9E75', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer',
+              }}>
+              完了
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
