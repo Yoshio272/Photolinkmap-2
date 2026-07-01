@@ -30,6 +30,24 @@ import { getPinPdfLinkUrl } from '../features/viewer/viewerTypes'
 const GSI_PHOTO_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
 const GSI_ATTR = "出典：<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank' rel='noopener'>国土地理院</a>"
 
+// 地図モード専用：通常写真をOpenSeadragonで開く /viewer?type=image URLを組み立てる
+// （共通関数 getPinPdfLinkUrl は変更せず、表示先の切替を地図モードに閉じ込める）
+function buildMapImageViewerUrl(
+  fileId: string | undefined,
+  title: string | undefined,
+  provider: string,
+  sharedUrl: string | undefined,
+): string {
+  const base = typeof window !== 'undefined' ? window.location.origin : ''
+  const params = new URLSearchParams()
+  params.set('type', 'image')
+  if (fileId) params.set('fileId', fileId)
+  if (title) params.set('title', title)
+  if (sharedUrl) params.set('shared', sharedUrl)
+  if (provider && provider !== 'google-drive') params.set('storageProvider', provider)
+  return `${base}/viewer?${params.toString()}`
+}
+
 // 地図モード専用のピン型（既存Pinとは独立）
 interface MapPin {
   id: string
@@ -404,29 +422,32 @@ export function MapPage() {
         if (!hit) { unmatched++; updatedPins.push(pin); continue }
         matched++
 
+        // Boxの場合、共有リンク(download_url)を取得（360度・通常写真とも外部閲覧に必要）
+        let sharedUrl: string | undefined
+        if (isBox && boxToken) {
+          try {
+            const res = await fetch('/.netlify/functions/box-proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'create_shared_link', token: boxToken, fileId: hit.fileId }),
+            })
+            const data = await res.json() as { shared_link?: { download_url?: string } }
+            if (data.shared_link?.download_url) sharedUrl = data.shared_link.download_url
+          } catch { /* 共有リンク取得失敗時はsharedUrlなしで続行 */ }
+        }
+
         let cloudUrl: string
         if (pin.is360) {
-          // 360度 → Viewer URL。Boxは共有リンクを取得して第三者閲覧可にする（同期時に確定）
-          let sharedUrl: string | undefined
-          if (isBox && boxToken) {
-            try {
-              const res = await fetch('/.netlify/functions/box-proxy', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'create_shared_link', token: boxToken, fileId: hit.fileId }),
-              })
-              const data = await res.json() as { shared_link?: { download_url?: string } }
-              if (data.shared_link?.download_url) sharedUrl = data.shared_link.download_url
-            } catch { /* 共有リンク取得失敗時はsharedUrlなしで続行 */ }
-          }
+          // 360度 → Photo Sphere Viewer（既存の共通関数をそのまま利用）
           cloudUrl = getPinPdfLinkUrl(
             'photosphere', hit.fileId, hit.viewUrl, pin.fileName,
             pin.lat, pin.lng, storageConfig.provider, sharedUrl,
           )
           linked360++
         } else {
-          // 通常写真 → 閲覧URL
-          cloudUrl = hit.viewUrl
+          // 通常写真 → OpenSeadragon（/viewer?type=image）
+          // 共通関数は使わず、地図モード内でURLを組み立てる（表示先の切替を地図モードに閉じる）
+          cloudUrl = buildMapImageViewerUrl(hit.fileId, pin.fileName, storageConfig.provider, sharedUrl)
         }
         updatedPins.push({ ...pin, cloudUrl, fileId: hit.fileId })
       }
