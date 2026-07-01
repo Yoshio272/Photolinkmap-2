@@ -35,6 +35,7 @@ function loadOpenSeadragon(): Promise<any> {
 export function ImageViewerModal({ imageUrl, title, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewerRef = useRef<any>(null)
+  const resizeObsRef = useRef<ResizeObserver | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [errorMsg, setErrorMsg] = useState('')
 
@@ -53,38 +54,55 @@ export function ImageViewerModal({ imageUrl, title, onClose }: Props) {
           prefixUrl: 'https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.0/images/',
           tileSources: { type: 'image', url: imageUrl },
           showNavigationControl: true,
-          navigationControlAnchor: 'BOTTOM_RIGHT',
+          navigationControlAnchor: 'TOP_LEFT',
+          showFullPageControl: true,     // フルスクリーン切替ボタン
+          showHomeControl: true,
+          showZoomControl: true,
           gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true },
-          minZoomImageRatio: 0.5,
-          maxZoomPixelRatio: 4,
+          homeFillsViewer: false,        // 画像全体が見えるようフィット（切れさせない）
+          minZoomImageRatio: 0.8,
+          maxZoomPixelRatio: 5,
           visibilityRatio: 1,
           constrainDuringPan: true,
+          defaultZoomLevel: 0,           // 0 = homeズーム（画面フィット）で開く
         })
         viewerRef.current = viewer
+        const fitHome = () => { try { viewer.viewport.goHome(true) } catch { /* ignore */ } }
         viewer.addHandler('open', () => {
           if (cancelled) return
           setStatus('ready')
-          // 画像を中央にフィット表示
-          try { viewer.viewport.goHome(true) } catch { /* ignore */ }
+          // コンテナサイズ確定後に確実にフィット（初期化直後は高さ未確定のことがある）
+          fitHome()
+          setTimeout(fitHome, 100)
+          setTimeout(fitHome, 300)
         })
         viewer.addHandler('open-failed', () => {
           if (!cancelled) { setStatus('error'); setErrorMsg('画像の読み込みに失敗しました') }
         })
+        // コンテナのサイズ変化を監視し、変化時に再フィット（レイアウト確定・回転対応）
+        if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+          const ro = new ResizeObserver(() => {
+            if (viewerRef.current) { try { viewerRef.current.viewport.goHome(true) } catch { /* ignore */ } }
+          })
+          ro.observe(containerRef.current)
+          resizeObsRef.current = ro
+        }
       } catch (e: unknown) {
         if (!cancelled) { setStatus('error'); setErrorMsg(e instanceof Error ? e.message : '表示エラー') }
       }
     })()
     return () => {
       cancelled = true
+      if (resizeObsRef.current) { resizeObsRef.current.disconnect(); resizeObsRef.current = null }
       if (viewerRef.current) { viewerRef.current.destroy(); viewerRef.current = null }
     }
   }, [imageUrl])
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: '#111', zIndex: 9999 }}>
-      {/* ヘッダー */}
+    <div style={{ position: 'fixed', inset: 0, background: '#111', zIndex: 9999, display: 'flex', flexDirection: 'column' }}>
+      {/* ヘッダー（固定高さ）*/}
       <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 48, zIndex: 2,
+        flex: '0 0 48px', height: 48, zIndex: 2,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '0 16px', background: 'rgba(0,0,0,0.6)', color: 'white',
         fontFamily: 'sans-serif',
@@ -97,8 +115,10 @@ export function ImageViewerModal({ imageUrl, title, onClose }: Props) {
         }}>×</button>
       </div>
 
-      {/* OpenSeadragon コンテナ（ヘッダー48pxの下に確実に配置）*/}
-      <div ref={containerRef} style={{ position: 'absolute', top: 48, left: 0, right: 0, bottom: 0 }} />
+      {/* OpenSeadragon コンテナ（残り全部＝flex:1 で高さ確定）*/}
+      <div style={{ flex: '1 1 auto', position: 'relative', minHeight: 0 }}>
+        <div ref={containerRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+      </div>
 
       {status === 'loading' && (
         <div style={{
