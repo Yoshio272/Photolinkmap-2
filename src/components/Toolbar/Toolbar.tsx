@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import {
   listProjectMetas, deleteProject, renameProject, deleteAllProjects,
   getStorageInfo, exportProjectJson, importProjectJson, loadProject,
@@ -6,6 +7,14 @@ import {
 import type { ProjectMeta } from '../../features/project'
 import type { StorageConfig } from '../../services/storage'
 import { StorageSettingsButton } from '../Storage/StorageSettingsButton'
+
+// ヘッダーの標準ボタンデザイン（地図モードと統一）
+const toolbarBtnStyle: CSSProperties = {
+  fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
+  border: '1px solid #d1d5db', background: 'white', color: '#374151', cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
 
 interface ToolbarProps {
   pdfLoaded: boolean
@@ -24,7 +33,7 @@ interface ToolbarProps {
 }
 
 export function Toolbar({
-  pdfLoaded, projectName, pinCount, gasConfigured,
+  pdfLoaded, projectName, pinCount,
   zoomScale, isDirty, saveStatus,
   onZoom, onFit, onSaveProject, onLoadProject,
   storageConfig, setStorageConfig,
@@ -78,54 +87,50 @@ export function Toolbar({
         {/* ロゴ */}
         <span className="text-sm font-bold text-[#1565C0] mr-1">PhotoLinkMap</span>
 
-        {/* 地図モードへ */}
+        {/* 地図モードへ（地図モードの切替ボタンと同じデザイン）*/}
         <a href="/map"
-          className="text-xs font-semibold px-2 py-1 rounded bg-[#1D9E75] text-white hover:bg-[#178a65] no-underline mr-1"
-          style={{ textDecoration: 'none' }}>
-          🗺 地図モード
+          className="no-underline mr-1"
+          style={{
+            fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
+            background: '#1D9E75', color: 'white', textDecoration: 'none', whiteSpace: 'nowrap',
+          }}>
+          🗺 地図モードへ
         </a>
 
-        {/* 保存先設定（共通コンポーネント）*/}
-        <StorageSettingsButton storageConfig={storageConfig} setStorageConfig={setStorageConfig} variant="toolbar" />
+        <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
 
-        {/* GASバッジ */}
-        <span className={`badge ${gasConfigured ? 'badge-green' : 'badge-warn'} text-xs`}>
-          {gasConfigured ? '🔗 GAS接続済み' : '⚠ GAS未設定'}
-        </span>
+        {/* 保存先設定（共通コンポーネント・地図モードデザイン）*/}
+        <StorageSettingsButton storageConfig={storageConfig} setStorageConfig={setStorageConfig} />
 
-        <div className="w-px h-5 bg-gray-200 mx-1" />
+        <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
 
-        {/* ズームコントロール */}
+        {/* ズームコントロール（pdf読込時のみ）*/}
         {pdfLoaded && (
           <>
-            <button className="btn btn-sm px-2 font-bold" onClick={() => onZoom(zoomScale - 0.25)}>−</button>
+            <button onClick={() => onZoom(zoomScale - 0.25)} style={toolbarBtnStyle}>−</button>
             <span className="text-xs text-gray-500 min-w-[40px] text-center tabular-nums">{Math.round(zoomScale * 100)}%</span>
-            <button className="btn btn-sm px-2 font-bold" onClick={() => onZoom(zoomScale + 0.25)}>＋</button>
-            <button className="btn btn-sm" onClick={onFit}>fit</button>
-            <button className="btn btn-sm" onClick={() => onZoom(1)}>1:1</button>
-            <div className="w-px h-5 bg-gray-200 mx-1" />
+            <button onClick={() => onZoom(zoomScale + 0.25)} style={toolbarBtnStyle}>＋</button>
+            <button onClick={onFit} style={toolbarBtnStyle}>fit</button>
+            <button onClick={() => onZoom(1)} style={toolbarBtnStyle}>1:1</button>
+            <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
           </>
         )}
 
         {/* 上書き保存 */}
-        <button className="btn" onClick={() => onSaveProject()}>
-          💾 上書き保存
-        </button>
+        <button onClick={() => onSaveProject()} style={toolbarBtnStyle}>💾 上書き保存</button>
 
         {/* 別名保存 */}
-        <button className="btn btn-sm" onClick={() => {
+        <button onClick={() => {
           const name = prompt('プロジェクト名を入力', projectName)
           if (name) onSaveProject(name)
-        }}>
-          📋 別名保存
-        </button>
+        }} style={toolbarBtnStyle}>📋 別名保存</button>
 
         {/* 管理 */}
-        <button className="btn" onClick={openManager}>
+        <button onClick={openManager} style={toolbarBtnStyle}>
           📂 管理 {info.projectCount > 0 && <span className="badge badge-blue ml-1">{info.projectCount}</span>}
         </button>
 
-        {/* 新規プロジェクト */}
+        {/* プロジェクト名 */}
         <span className="text-xs text-gray-400 hidden md:block truncate max-w-[100px]">{projectName}</span>
 
         {/* 未保存インジケーター */}
