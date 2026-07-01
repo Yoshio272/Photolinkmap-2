@@ -12,23 +12,34 @@ import { StorageSettingsPanel } from './StorageSettingsPanel'
 interface Props {
   storageConfig: StorageConfig
   setStorageConfig: (c: StorageConfig) => void
+  variant?: 'map' | 'toolbar'   // ヘッダーのデザインに合わせる（map=地図モード / toolbar=図面モード）
 }
 
-export function StorageSettingsButton({ storageConfig, setStorageConfig }: Props) {
+export function StorageSettingsButton({ storageConfig, setStorageConfig, variant = 'map' }: Props) {
   const [open, setOpen] = useState(false)
+
+  // ヘッダーごとにボタンの見た目を合わせる（高さ・余白の統一）
+  const buttonNode = variant === 'toolbar' ? (
+    // 図面モード：既存の btn クラスに揃える（px-3 py-1.5 相当）
+    <button onClick={() => setOpen(true)} className="btn" style={{ borderColor: '#1D9E75', color: '#0F6E56' }}>
+      📁 保存先設定
+    </button>
+  ) : (
+    // 地図モード：インラインstyle（padding 4px 10px）
+    <button
+      onClick={() => setOpen(true)}
+      style={{
+        fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
+        border: '1px solid #1D9E75', background: 'white', color: '#0F6E56', cursor: 'pointer',
+        whiteSpace: 'nowrap',
+      }}>
+      📁 保存先設定
+    </button>
+  )
 
   return (
     <>
-      {/* 保存先設定ボタン（ヘッダー共通デザイン）*/}
-      <button
-        onClick={() => setOpen(true)}
-        style={{
-          fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
-          border: '1px solid #1D9E75', background: 'white', color: '#0F6E56', cursor: 'pointer',
-          whiteSpace: 'nowrap',
-        }}>
-        📁 保存先設定
-      </button>
+      {buttonNode}
 
       {/* モーダル */}
       {open && (
