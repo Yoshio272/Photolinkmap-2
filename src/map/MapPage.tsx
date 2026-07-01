@@ -214,7 +214,7 @@ export function MapPage() {
           width:28px;height:28px;border-radius:50%;
           background:${color};border:2px solid ${border};
           box-shadow:0 1px 4px rgba(0,0,0,0.4);
-          display:flex;align-items:center;justify-content:center;
+          display:flex;align-items:center;justify-content:center;line-height:1;
           color:white;font-weight:bold;font-size:13px;font-family:sans-serif;">${no}</div>
         ${badge}
       </div>`,
@@ -820,6 +820,24 @@ export function MapPage() {
     if (st) { st.opacity = overlayOpacity / 100; updateOverlayTransform() }
   }, [overlayOpacity, updateOverlayTransform])
 
+  // ④ Shift+ホイールで透明度変更（Shift中は地図ズームをキャンセル）
+  useEffect(() => {
+    const map = mapRef.current
+    const container = mapElRef.current
+    if (!map || !container || !overlayLoaded) return
+    const onWheel = (e: WheelEvent) => {
+      if (!e.shiftKey) return // 通常ホイールは地図ズームに任せる
+      // Shift押下中：地図ズームを止めて透明度を変更
+      e.preventDefault()
+      e.stopPropagation()
+      const delta = e.deltaY < 0 ? 2 : -2 // 上で+2%、下で-2%
+      setOverlayOpacity(prev => Math.max(0, Math.min(100, prev + delta)))
+    }
+    // captureフェーズでLeafletのズームより先に捕まえる
+    container.addEventListener('wheel', onWheel, { passive: false, capture: true })
+    return () => container.removeEventListener('wheel', onWheel, { capture: true } as EventListenerOptions)
+  }, [overlayLoaded])
+
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       {/* 地図エリア */}
@@ -1067,7 +1085,8 @@ export function MapPage() {
                 />
               </div>
               <div style={{ fontSize: 10, color: '#999', marginBottom: 8, lineHeight: 1.5 }}>
-                💡 図面をドラッグで移動、Shift+ドラッグで回転（0.5°単位）
+                💡 図面をドラッグで移動、Shift+ドラッグで回転（0.5°単位）<br />
+                💡 Shift+マウスホイールで透明度を変更
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button
