@@ -721,20 +721,22 @@ export function MapPage() {
   useEffect(() => {
     const map = mapRef.current
     if (!map || !libReady) return
-    const update = () => { updateOverlayTransform(); updateScaleBar() }
+    // 図面追従(transform)は move で毎フレーム（DOM操作のみで軽い）
+    // 縮尺バー更新は setState を伴うため moveend/zoomend のみ（パン中のカクつき防止）
+    const followUpdate = () => updateOverlayTransform()
+    const scaleUpdate = () => { updateOverlayTransform(); updateScaleBar() }
     updateScaleBar() // 初回計算
-    // start/move/end + zoom系を全て登録（将来の最適化拡張に備える）
-    map.on('move', update)
-    map.on('moveend', update)
-    map.on('zoom', update)
-    map.on('zoomend', update)
-    map.on('viewreset', update)
+    map.on('move', followUpdate)
+    map.on('moveend', scaleUpdate)
+    map.on('zoom', followUpdate)
+    map.on('zoomend', scaleUpdate)
+    map.on('viewreset', scaleUpdate)
     return () => {
-      map.off('move', update)
-      map.off('moveend', update)
-      map.off('zoom', update)
-      map.off('zoomend', update)
-      map.off('viewreset', update)
+      map.off('move', followUpdate)
+      map.off('moveend', scaleUpdate)
+      map.off('zoom', followUpdate)
+      map.off('zoomend', scaleUpdate)
+      map.off('viewreset', scaleUpdate)
     }
   }, [libReady, updateOverlayTransform, updateScaleBar])
 
