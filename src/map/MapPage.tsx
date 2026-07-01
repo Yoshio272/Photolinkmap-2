@@ -227,7 +227,9 @@ export function MapPage() {
         const style = document.createElement('style')
         style.id = zoomStyleId
         style.textContent = `.leaflet-top.leaflet-right .leaflet-control-zoom { margin-top: 66px; }
-.leaflet-control-attribution { margin-bottom: 13px !important; }`
+.leaflet-control-attribution { margin-bottom: 13px !important; }
+body.pdf-capturing .map-pin-number-text { transform: translateY(-8px); }
+body.pdf-capturing .map-pin-badge { transform: translateY(-8px); }`
         document.head.appendChild(style)
       }
       mapRef.current = map
@@ -246,17 +248,17 @@ export function MapPage() {
     // 360度写真は枠を青系にして🌐バッジを付ける
     const border = is360 ? '#2196F3' : 'white'
     const badge = is360
-      ? `<div style="position:absolute;top:-6px;right:-6px;width:16px;height:16px;border-radius:50%;background:#2196F3;border:1.5px solid white;display:flex;align-items:center;justify-content:center;font-size:9px;">🌐</div>`
+      ? `<div class="map-pin-badge" style="position:absolute;top:-6px;right:-6px;width:16px;height:16px;border-radius:50%;background:#2196F3;border:1.5px solid white;display:flex;align-items:center;justify-content:center;font-size:9px;">🌐</div>`
       : ''
     return L.divIcon({
       className: 'map-pin-icon',
       html: `<div style="position:relative;">
-        <div style="
+        <div class="map-pin-number" style="
           width:28px;height:28px;border-radius:50%;
           background:${color};border:2px solid ${border};
           box-shadow:0 1px 4px rgba(0,0,0,0.4);
           display:flex;align-items:center;justify-content:center;line-height:1;
-          color:white;font-weight:bold;font-size:13px;font-family:sans-serif;"><span style="display:inline-block;transform:translateY(-13px);">${no}</span></div>
+          color:white;font-weight:bold;font-size:13px;font-family:sans-serif;"><span class="map-pin-number-text" style="display:inline-block;">${no}</span></div>
         ${badge}
       </div>`,
       iconSize: [28, 28],
@@ -511,6 +513,9 @@ export function MapPage() {
         }
       })
 
+      // PDF（html2canvas）出力時のみ、ピン文字を8px上へ補正する。
+      // 画面表示はflex中央のまま。html2canvasのflex中央ズレを撮影の瞬間だけ相殺する。
+      document.body.classList.add('pdf-capturing')
       const canvas: HTMLCanvasElement = await html2canvas(container, {
         useCORS: true,
         allowTaint: false,
@@ -526,6 +531,7 @@ export function MapPage() {
     } catch (e: unknown) {
       setCaptureLog('❌ ' + (e instanceof Error ? e.message : '画像化失敗'))
     } finally {
+      document.body.classList.remove('pdf-capturing')
       setCapturing(false)
     }
   }
