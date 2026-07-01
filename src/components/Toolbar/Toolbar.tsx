@@ -4,6 +4,8 @@ import {
   getStorageInfo, exportProjectJson, importProjectJson, loadProject,
 } from '../../features/project'
 import type { ProjectMeta } from '../../features/project'
+import type { StorageConfig } from '../../services/storage'
+import { StorageSettingsButton } from '../Storage/StorageSettingsButton'
 
 interface ToolbarProps {
   pdfLoaded: boolean
@@ -17,12 +19,15 @@ interface ToolbarProps {
   onFit: () => void
   onSaveProject: (name?: string) => void   // 引数なし→上書き保存、あり→別名保存
   onLoadProject: (name: string) => void
+  storageConfig: StorageConfig
+  setStorageConfig: (c: StorageConfig) => void
 }
 
 export function Toolbar({
   pdfLoaded, projectName, pinCount, gasConfigured,
   zoomScale, isDirty, saveStatus,
   onZoom, onFit, onSaveProject, onLoadProject,
+  storageConfig, setStorageConfig,
 }: ToolbarProps) {
   const importRef = useRef<HTMLInputElement>(null)
   const [showManager, setShowManager] = useState(false)
@@ -79,6 +84,9 @@ export function Toolbar({
           style={{ textDecoration: 'none' }}>
           🗺 地図モード
         </a>
+
+        {/* 保存先設定（共通コンポーネント）*/}
+        <StorageSettingsButton storageConfig={storageConfig} setStorageConfig={setStorageConfig} />
 
         {/* GASバッジ */}
         <span className={`badge ${gasConfigured ? 'badge-green' : 'badge-warn'} text-xs`}>
