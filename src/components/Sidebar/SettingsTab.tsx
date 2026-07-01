@@ -28,7 +28,7 @@ const PIN_COLORS = [
   { c: '#2E7D32', label: '緑' }, { c: '#F57F17', label: '黄' },
   { c: '#6A1B9A', label: '紫' }, { c: '#333333', label: '黒' },
 ]
-const PROVIDER_ORDER: StorageProviderType[] = ['google-drive', 'box', 'onedrive', 'sharepoint', 'dropbox']
+const PROVIDER_ORDER: StorageProviderType[] = ['google-drive', 'box', 'onedrive', 'dropbox']
 
 export function SettingsTab({
   style, setStyle, storageConfig, setStorageConfig, pdfLoaded, onBgLoaded,
