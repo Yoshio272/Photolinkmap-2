@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { GasCodeModal } from './Gas/GasCodeModal'
 
 export function WelcomeScreen() {
   const [gasOpen, setGasOpen] = useState(false)
+  const [showGasCode, setShowGasCode] = useState(false)
 
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-stone-200 z-10">
@@ -48,7 +50,23 @@ export function WelcomeScreen() {
               ].map(({ s, t, d }) => (
                 <div key={s} className="flex gap-2">
                   <span className="text-[#1565C0] font-bold w-12 flex-shrink-0">STEP{s}</span>
-                  <div><div className="font-semibold text-gray-700">{t}</div><div className="text-gray-500">{d}</div></div>
+                  <div>
+                    <div className="font-semibold text-gray-700">{t}</div>
+                    {s === 2 ? (
+                      <div className="text-gray-500">
+                        script.google.comで
+                        <button
+                          onClick={() => setShowGasCode(true)}
+                          className="text-[#1565C0] font-semibold underline hover:text-[#0D47A1]"
+                          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit' }}>
+                          gas-drive-api.gs
+                        </button>
+                        を貼付 → デプロイ（アクセス：全員）
+                      </div>
+                    ) : (
+                      <div className="text-gray-500">{d}</div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -59,6 +77,8 @@ export function WelcomeScreen() {
           → 右カラム「設定」タブの「図面を読み込む」から開始
         </div>
       </div>
+
+      {showGasCode && <GasCodeModal onClose={() => setShowGasCode(false)} />}
     </div>
   )
 }
