@@ -565,7 +565,7 @@ export function MapPage() {
     el.style.left = `${pt.x}px`
     el.style.top = `${pt.y}px`
     el.style.transform =
-      `translate(-50%, -50%) translateZ(0) rotate(${st.userRotation}deg) scale(${scale})`
+      `translate(-50%, -50%) rotate(${st.userRotation}deg) scale(${scale})`
     el.style.transformOrigin = 'center center'
     el.style.opacity = String(st.opacity)
   }, [])
@@ -813,9 +813,9 @@ export function MapPage() {
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       {/* 地図エリア */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ flex: 1, position: 'relative' }}>
         {/* 撮影コンテナ：地図＋オーバーレイ（これをhtml2canvasで撮る）*/}
-        <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
+        <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
           <div ref={mapElRef} style={{ width: '100%', height: '100%' }} />
 
           {/* C-3a：図面オーバーレイ（地図タイルの上、ピンより下）*/}
@@ -826,11 +826,10 @@ export function MapPage() {
                 position: 'absolute',
                 width: overlayStateRef.current.imgW,
                 height: overlayStateRef.current.imgH,
-                zIndex: 300,            // タイル(200)より上、Leafletマーカー(600)より下＝ピンが図面の上
+                zIndex: 400,            // C3b-rotateと同じ値に戻す（切り分け）
                 cursor: shiftHeld ? 'crosshair' : 'move',
                 pointerEvents: 'auto',
                 willChange: 'transform',
-                backfaceVisibility: 'hidden',
                 userSelect: 'none',
               }}
             >
