@@ -86,7 +86,7 @@ export function Toolbar({
         </a>
 
         {/* 保存先設定（共通コンポーネント）*/}
-        <StorageSettingsButton storageConfig={storageConfig} setStorageConfig={setStorageConfig} />
+        <StorageSettingsButton storageConfig={storageConfig} setStorageConfig={setStorageConfig} variant="toolbar" />
 
         {/* GASバッジ */}
         <span className={`badge ${gasConfigured ? 'badge-green' : 'badge-warn'} text-xs`}>
