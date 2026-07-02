@@ -1298,21 +1298,24 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         <div ref={captureContainerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
           <div ref={mapElRef} style={{ width: '100%', height: '100%' }} />
 
-          {/* C-3a：図面オーバーレイ（地図タイルの上、ピンより下）*/}
-          {overlayLoaded && overlayStateRef.current && (
-            <div
-              ref={overlayElRef}
-              style={{
-                position: 'absolute',
-                width: overlayStateRef.current.imgW,
-                height: overlayStateRef.current.imgH,
-                zIndex: 400,            // C3b-rotateと同じ値に戻す（切り分け）
-                cursor: shiftHeld ? 'crosshair' : 'move',
-                pointerEvents: 'auto',
-                willChange: 'transform',
-                userSelect: 'none',
-              }}
-            >
+          {/* C-3a：図面オーバーレイ（地図タイルの上、ピンより下）
+              React×LeafletのDOM衝突を避けるため、条件付きで要素を消さず、
+              常にDOMを保持して表示/非表示を切り替える（removeChild衝突の根本回避）。*/}
+          <div
+            ref={overlayElRef}
+            style={{
+              position: 'absolute',
+              display: overlayLoaded && overlayStateRef.current ? 'block' : 'none',
+              width: overlayStateRef.current?.imgW ?? 0,
+              height: overlayStateRef.current?.imgH ?? 0,
+              zIndex: 400,
+              cursor: shiftHeld ? 'crosshair' : 'move',
+              pointerEvents: overlayLoaded ? 'auto' : 'none',
+              willChange: 'transform',
+              userSelect: 'none',
+            }}
+          >
+            {overlayLoaded && overlayStateRef.current && (
               <img
                 ref={overlayImgRef}
                 src={overlayStateRef.current.dataUrl}
@@ -1320,15 +1323,14 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
                 draggable={false}
                 onLoad={() => {
                   // 画像デコード完了後にtransform適用（初回paint確実化）
-                  // rAF2段でレイアウト確定を待つ
                   requestAnimationFrame(() => {
                     requestAnimationFrame(() => updateOverlayTransform())
                   })
                 }}
                 style={{ width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
               />
-            </div>
-          )}
+            )}
+          </div>
 
           {/* オーバーレイ：現場名（左上）*/}
           {siteName && (
