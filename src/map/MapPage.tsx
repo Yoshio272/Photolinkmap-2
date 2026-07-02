@@ -27,6 +27,10 @@ import type { StorageConfig, StorageFile } from '../services/storage'
 import type { GoogleDriveProvider } from '../services/storage/GoogleDriveProvider'
 import { getPinPdfLinkUrl } from '../features/viewer/viewerTypes'
 import { StorageSettingsButton } from '../components/Storage/StorageSettingsButton'
+import {
+  serializeProject, deserializeProject, saveProject, loadProject,
+  rememberLastProject, type MapState,
+} from '../features/mapProject'
 
 // 地理院 航空写真タイル（APIキー不要・商用可）
 const GSI_PHOTO_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
@@ -45,6 +49,13 @@ const BASE_MAPS: BaseMapDef[] = [
 const disabledBtnStyle: CSSProperties = {
   fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
   border: '1px solid #e5e7eb', background: '#f3f4f6', color: '#9ca3af', cursor: 'not-allowed',
+}
+
+// 機能する保存系ボタン（図面モードのヘッダーと同じデザイン）
+const mapToolbarBtnStyle: CSSProperties = {
+  fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
+  border: '1px solid #d1d5db', background: 'white', color: '#374151', cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
 // 地図モード専用：通常写真をOpenSeadragonで開く /viewer?type=image URLを組み立てる
@@ -164,6 +175,8 @@ export function MapPage() {
   // ===== C-1：画像化（出力レイヤー全部込み）=====
   const captureContainerRef = useRef<HTMLDivElement>(null)
   const [siteName, setSiteName] = useState('')
+  const [projectName, setProjectName] = useState<string>('') // 現在開いているプロジェクト名（未保存は空）
+  const [projectSaveStatus, setProjectSaveStatus] = useState('') // 保存結果メッセージ
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [captureLog, setCaptureLog] = useState('')
@@ -763,6 +776,158 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     setOverlayLog('')
   }
 
+  // ===== プロジェクト保存（Step2: 保存基盤モジュールへの接続）=====
+
+  // 図面オーバーレイ画像を 200px 幅・JPEG品質0.6 のサムネイルに縮小
+  async function makeThumbnail(): Promise<string | null> {
+    const st = overlayStateRef.current
+    if (!st?.dataUrl) return null
+    return await new Promise<string | null>((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        const w = 200
+        const h = Math.round((img.naturalHeight / img.naturalWidth) * w)
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { resolve(null); return }
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h)
+        ctx.drawImage(img, 0, 0, w, h)
+        try { resolve(canvas.toDataURL('image/jpeg', 0.6)) } catch { resolve(null) }
+      }
+      img.onerror = () => resolve(null)
+      img.src = st.dataUrl
+    })
+  }
+
+  // 図面画像を JPEG品質0.75 に再圧縮（保存容量を抑える。案W）
+  async function compressOverlayDataUrl(dataUrl: string): Promise<string> {
+    return await new Promise<string>((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight
+        const ctx = canvas.getContext('2d')
+        if (!ctx) { resolve(dataUrl); return }
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, 0, 0)
+        try { resolve(canvas.toDataURL('image/jpeg', 0.75)) } catch { resolve(dataUrl) }
+      }
+      img.onerror = () => resolve(dataUrl)
+      img.src = dataUrl
+    })
+  }
+
+  // 現在の画面状態を MapState に集める（シリアライズの入力）
+  async function collectMapState(): Promise<MapState> {
+    const map = mapRef.current
+    const center = map ? map.getCenter() : { lat: 35.681236, lng: 139.767125 }
+    const zoom = map ? map.getZoom() : 18
+    const st = overlayStateRef.current
+    const thumbnail = await makeThumbnail()
+    let overlay: MapState['overlay'] = null
+    if (st) {
+      const compressed = await compressOverlayDataUrl(st.dataUrl)
+      overlay = {
+        dataUrl: compressed, imgW: st.imgW, imgH: st.imgH,
+        anchorLat: st.anchorLat, anchorLng: st.anchorLng,
+        baseZoom: st.baseZoom, baseFitScale: st.baseFitScale,
+        userScale: st.userScale, userRotation: st.userRotation, opacity: st.opacity,
+      }
+    }
+    return {
+      siteName,
+      mapCenter: { lat: center.lat, lng: center.lng },
+      mapZoom: zoom,
+      baseMap,
+      pins: pins.map(p => ({
+        id: p.id, no: p.no, lat: p.lat, lng: p.lng, fileName: p.fileName,
+        hasGps: p.hasGps, comment: p.comment, is360: p.is360,
+        cloudUrl: p.cloudUrl, fileId: p.fileId,
+      })),
+      overlay,
+      thumbnail,
+    }
+  }
+
+  // 保存の共通処理（完全/フォールバックの結果をメッセージ表示）
+  async function doSaveProject(name: string, createdAt?: string) {
+    setProjectSaveStatus('保存中...')
+    const state = await collectMapState()
+    const project = serializeProject(state, name, { createdAt })
+    const res = saveProject(project)
+    if (res.ok && res.mode === 'full') {
+      setProjectName(name)
+      rememberLastProject(name)
+      setProjectSaveStatus(`✓ 「${name}」を保存しました`)
+    } else if (res.ok && res.mode === 'fallback') {
+      setProjectName(name)
+      rememberLastProject(name)
+      setProjectSaveStatus(`✓ 「${name}」を保存しました（図面画像は容量超過のため位置情報のみ）`)
+    } else {
+      setProjectSaveStatus(`❌ 保存に失敗しました: ${res.error ?? ''}`)
+    }
+    setTimeout(() => setProjectSaveStatus(''), 4000)
+  }
+
+  // 上書き保存（未保存なら別名保存にフォールバック）
+  async function handleSaveProject() {
+    if (!projectName) { handleSaveAsProject(); return }
+    const existing = loadProject(projectName)
+    await doSaveProject(projectName, existing?.createdAt)
+  }
+
+  // 別名保存
+  async function handleSaveAsProject() {
+    const name = prompt('プロジェクト名を入力してください', projectName || siteName || '')
+    if (!name) return
+    await doSaveProject(name)
+  }
+
+  // プロジェクトを読み込んで画面状態に復元（Step3の管理モーダルから呼ぶ）
+  function applyLoadedProject(name: string) {
+    const project = loadProject(name)
+    if (!project) { setProjectSaveStatus('❌ プロジェクトが見つかりません'); return }
+    const state: MapState = deserializeProject(project)
+    // 地図位置
+    const map = mapRef.current
+    if (map) map.setView([state.mapCenter.lat, state.mapCenter.lng], state.mapZoom)
+    if (state.baseMap && state.baseMap !== baseMap) switchBaseMap(state.baseMap as BaseMapKey)
+    // 現場名
+    setSiteName(state.siteName)
+    // ピン（写真プレビューは保存されていないので photoDataUrl は空）
+    setPins(state.pins.map(p => ({
+      id: p.id, no: p.no, lat: p.lat, lng: p.lng, fileName: p.fileName,
+      photoDataUrl: '', hasGps: p.hasGps, comment: p.comment, is360: p.is360,
+      cloudUrl: p.cloudUrl, fileId: p.fileId,
+    })))
+    // 図面オーバーレイ
+    if (state.overlay && state.overlay.dataUrl) {
+      overlayStateRef.current = {
+        dataUrl: state.overlay.dataUrl, imgW: state.overlay.imgW, imgH: state.overlay.imgH,
+        anchorLat: state.overlay.anchorLat, anchorLng: state.overlay.anchorLng,
+        baseZoom: state.overlay.baseZoom, baseFitScale: state.overlay.baseFitScale,
+        userScale: state.overlay.userScale, userRotation: state.overlay.userRotation,
+        opacity: state.overlay.opacity,
+      }
+      setOverlayLoaded(true)
+      setOverlayRotation(state.overlay.userRotation)
+      setOverlayScalePct(Math.round(state.overlay.userScale * 100))
+      setOverlayOpacity(Math.round(state.overlay.opacity * 100))
+      requestAnimationFrame(() => updateOverlayTransform())
+    } else {
+      overlayStateRef.current = null
+      setOverlayLoaded(false)
+      if (state.overlay && !state.overlay.dataUrl) {
+        setOverlayLog('※ この案件は図面画像が保存されていません（位置情報のみ）。図面を再読込してください')
+      }
+    }
+    setProjectName(name)
+    rememberLastProject(name)
+    setProjectSaveStatus(`✓ 「${name}」を開きました`)
+    setTimeout(() => setProjectSaveStatus(''), 3000)
+  }
+
   // 地図のpan/zoomイベントで図面を追従させる
   useEffect(() => {
     const map = mapRef.current
@@ -992,10 +1157,21 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
 
         {/* 保存系（地図モードでは未実装のためグレーアウト）*/}
-        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>💾 上書き保存</button>
-        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>📋 別名保存</button>
-        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>📂 管理</button>
-        <button disabled title="地図モードでは今後対応予定" style={disabledBtnStyle}>新規プロジェクト</button>
+        {/* 上書き保存・別名保存（機能する）*/}
+        <button onClick={handleSaveProject} style={mapToolbarBtnStyle}>💾 上書き保存</button>
+        <button onClick={handleSaveAsProject} style={mapToolbarBtnStyle}>📋 別名保存</button>
+        {/* 管理・新規はStep3で実装予定 */}
+        <button disabled title="次のステップで対応予定" style={disabledBtnStyle}>📂 管理</button>
+        <button disabled title="次のステップで対応予定" style={disabledBtnStyle}>新規プロジェクト</button>
+        {/* 現在のプロジェクト名 */}
+        {projectName && <span style={{ fontSize: 12, color: '#6b7280' }}>{projectName}</span>}
+        {/* 保存ステータス */}
+        {projectSaveStatus && (
+          <span style={{
+            fontSize: 12, fontWeight: 600,
+            color: projectSaveStatus.startsWith('✓') ? '#0F6E56' : projectSaveStatus.startsWith('❌') ? '#c00' : '#6b7280',
+          }}>{projectSaveStatus}</span>
+        )}
       </div>
 
       {/* ===== 本体（地図エリア＋サイドバー）===== */}
