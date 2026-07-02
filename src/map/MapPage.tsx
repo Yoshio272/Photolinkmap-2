@@ -47,11 +47,6 @@ const BASE_MAPS: BaseMapDef[] = [
 ]
 
 // ヘッダーの未実装ボタン（地図モードでは保存系が未対応のためグレーアウト表示）
-const disabledBtnStyle: CSSProperties = {
-  fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
-  border: '1px solid #e5e7eb', background: '#f3f4f6', color: '#9ca3af', cursor: 'not-allowed',
-}
-
 // 機能する保存系ボタン（図面モードのヘッダーと同じデザイン）
 const mapToolbarBtnStyle: CSSProperties = {
   fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
