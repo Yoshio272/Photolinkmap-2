@@ -30,7 +30,7 @@ import { StorageSettingsButton } from '../components/Storage/StorageSettingsButt
 import {
   serializeProject, deserializeProject, saveProject, loadProject,
   listProjects, deleteProject, renameProject,
-  rememberLastProject, type MapState, type MapProjectMeta,
+  rememberLastProject, getLastProjectName, type MapState, type MapProjectMeta,
 } from '../features/mapProject'
 
 // 地理院 航空写真タイル（APIキー不要・商用可）
@@ -175,6 +175,9 @@ export function MapPage() {
   const [projectSaveStatus, setProjectSaveStatus] = useState('') // 保存結果メッセージ
   const [showManager, setShowManager] = useState(false) // プロジェクト管理モーダル
   const [projectList, setProjectList] = useState<MapProjectMeta[]>([]) // 保存済み一覧
+  const [isDirty, setIsDirty] = useState(false) // 未保存の変更があるか
+  const suppressDirtyRef = useRef(true) // 読込・保存・初期化中はdirtyを立てない
+  const [lastProjectPrompt, setLastProjectPrompt] = useState<string | null>(null) // 起動時の前回案内
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [captureLog, setCaptureLog] = useState('')
@@ -857,10 +860,12 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     if (res.ok && res.mode === 'full') {
       setProjectName(name)
       rememberLastProject(name)
+      setIsDirty(false)
       setProjectSaveStatus(`✓ 「${name}」を保存しました`)
     } else if (res.ok && res.mode === 'fallback') {
       setProjectName(name)
       rememberLastProject(name)
+      setIsDirty(false)
       setProjectSaveStatus(`✓ 「${name}」を保存しました（図面画像は容量超過のため位置情報のみ）`)
     } else {
       setProjectSaveStatus(`❌ 保存に失敗しました: ${res.error ?? ''}`)
@@ -886,6 +891,7 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
   function applyLoadedProject(name: string) {
     const project = loadProject(name)
     if (!project) { setProjectSaveStatus('❌ プロジェクトが見つかりません'); return }
+    suppressDirtyRef.current = true // 読込中の変更でdirtyを立てない
     const state: MapState = deserializeProject(project)
     // 地図位置
     const map = mapRef.current
@@ -924,6 +930,9 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     rememberLastProject(name)
     setProjectSaveStatus(`✓ 「${name}」を開きました`)
     setTimeout(() => setProjectSaveStatus(''), 3000)
+    // 読込完了後、dirtyをリセットして監視を再開
+    setIsDirty(false)
+    setTimeout(() => { suppressDirtyRef.current = false }, 200)
   }
 
   // 管理モーダルを開く（一覧を読み込む）
@@ -934,6 +943,9 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
 
   // 管理モーダルから開く
   function handleOpenProject(name: string) {
+    if (isDirty && !confirm('保存していない変更があります。別のプロジェクトを開くと失われます。よろしいですか？')) {
+      return
+    }
     applyLoadedProject(name)
     setShowManager(false)
   }
@@ -958,16 +970,51 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
 
   // 新規プロジェクト（現在の内容をクリア）
   function handleNewProject() {
+    // 未保存の変更がある場合は確認
+    if (isDirty && !confirm('保存していない変更があります。新規プロジェクトを開始すると失われます。よろしいですか？')) {
+      return
+    }
     // 現在の内容をクリア
+    suppressDirtyRef.current = true
     setPins([])
     overlayStateRef.current = null
     setOverlayLoaded(false)
     setOverlayLog('')
     setSiteName('')
     setProjectName('')
+    setIsDirty(false)
     setProjectSaveStatus('新規プロジェクトを開始しました')
     setTimeout(() => setProjectSaveStatus(''), 3000)
+    setTimeout(() => { suppressDirtyRef.current = false }, 100)
   }
+
+  // 変更検出：主要stateが変わったら未保存(dirty)にする（読込・保存・初期化中は抑制）
+  useEffect(() => {
+    if (suppressDirtyRef.current) return
+    setIsDirty(true)
+  }, [pins, siteName, baseMap, overlayLoaded, overlayRotation, overlayScalePct, overlayOpacity])
+
+  // 起動時：前回開いていたプロジェクト名があれば案内を出す（自動復元はしない）
+  useEffect(() => {
+    if (!libReady) return
+    const last = getLastProjectName()
+    if (last) {
+      const exists = listProjects().some(p => p.name === last)
+      if (exists) setLastProjectPrompt(last)
+    }
+    // 初期化完了後、dirty監視を有効化
+    const t = setTimeout(() => { suppressDirtyRef.current = false }, 300)
+    return () => clearTimeout(t)
+  }, [libReady])
+
+  // タブを閉じる・リロード時、未保存なら警告（ブラウザ標準ダイアログ）
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) { e.preventDefault(); e.returnValue = '' }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [isDirty])
 
   // 地図のpan/zoomイベントで図面を追従させる
   useEffect(() => {
@@ -1170,10 +1217,16 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         <span style={{ fontSize: 14, fontWeight: 700, color: '#1565C0', marginRight: 4 }}>PhotoLinkMap</span>
 
         {/* 図面モードへ */}
-        <a href="/" style={{
-          fontSize: 12, fontWeight: 600, padding: '4px 8px', borderRadius: 4,
-          background: '#1565C0', color: 'white', textDecoration: 'none', marginRight: 4,
-        }}>📐 図面モード</a>
+        <a href="/"
+          onClick={(e) => {
+            if (isDirty && !confirm('保存していない変更があります。図面モードへ移動すると失われます。よろしいですか？')) {
+              e.preventDefault()
+            }
+          }}
+          style={{
+            fontSize: 12, fontWeight: 600, padding: '4px 8px', borderRadius: 4,
+            background: '#1565C0', color: 'white', textDecoration: 'none', marginRight: 4,
+          }}>📐 図面モードへ</a>
 
         {/* 地図種類の切り替え */}
         <div style={{ display: 'inline-flex', border: '1px solid #d1d5db', borderRadius: 6, overflow: 'hidden', marginRight: 4 }}>
@@ -1205,6 +1258,7 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         <button onClick={handleNewProject} style={mapToolbarBtnStyle}>新規プロジェクト</button>
         {/* 現在のプロジェクト名 */}
         {projectName && <span style={{ fontSize: 12, color: '#6b7280' }}>{projectName}</span>}
+        {isDirty && <span style={{ fontSize: 12, fontWeight: 600, color: '#f59e0b' }}>● 未保存</span>}
         {/* 保存ステータス */}
         {projectSaveStatus && (
           <span style={{
@@ -1213,6 +1267,28 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
           }}>{projectSaveStatus}</span>
         )}
       </div>
+
+      {/* 起動時：前回プロジェクトの案内バナー */}
+      {lastProjectPrompt && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px',
+          background: '#EEF6FF', borderBottom: '1px solid #cfe2ff', flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 13, color: '#1565C0' }}>
+            前回のプロジェクト「<b>{lastProjectPrompt}</b>」があります
+          </span>
+          <button
+            onClick={() => { applyLoadedProject(lastProjectPrompt); setLastProjectPrompt(null) }}
+            style={{ fontSize: 12, fontWeight: 600, padding: '4px 12px', borderRadius: 4, border: 'none', background: '#1565C0', color: 'white', cursor: 'pointer' }}>
+            続きから開く
+          </button>
+          <button
+            onClick={() => setLastProjectPrompt(null)}
+            style={{ fontSize: 12, fontWeight: 600, padding: '4px 12px', borderRadius: 4, border: '1px solid #ccc', background: 'white', color: '#555', cursor: 'pointer' }}>
+            新規で始める
+          </button>
+        </div>
+      )}
 
       {/* ===== 本体（地図エリア＋サイドバー）===== */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
