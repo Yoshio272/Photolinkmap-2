@@ -29,7 +29,8 @@ import { getPinPdfLinkUrl } from '../features/viewer/viewerTypes'
 import { StorageSettingsButton } from '../components/Storage/StorageSettingsButton'
 import {
   serializeProject, deserializeProject, saveProject, loadProject,
-  rememberLastProject, type MapState,
+  listProjects, deleteProject, renameProject,
+  rememberLastProject, type MapState, type MapProjectMeta,
 } from '../features/mapProject'
 
 // 地理院 航空写真タイル（APIキー不要・商用可）
@@ -177,6 +178,8 @@ export function MapPage() {
   const [siteName, setSiteName] = useState('')
   const [projectName, setProjectName] = useState<string>('') // 現在開いているプロジェクト名（未保存は空）
   const [projectSaveStatus, setProjectSaveStatus] = useState('') // 保存結果メッセージ
+  const [showManager, setShowManager] = useState(false) // プロジェクト管理モーダル
+  const [projectList, setProjectList] = useState<MapProjectMeta[]>([]) // 保存済み一覧
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
   const [captureLog, setCaptureLog] = useState('')
@@ -928,6 +931,49 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     setTimeout(() => setProjectSaveStatus(''), 3000)
   }
 
+  // 管理モーダルを開く（一覧を読み込む）
+  function openManager() {
+    setProjectList(listProjects())
+    setShowManager(true)
+  }
+
+  // 管理モーダルから開く
+  function handleOpenProject(name: string) {
+    applyLoadedProject(name)
+    setShowManager(false)
+  }
+
+  // 管理モーダルから削除
+  function handleDeleteProject(name: string) {
+    if (!confirm(`「${name}」を削除しますか？この操作は取り消せません。`)) return
+    deleteProject(name)
+    if (projectName === name) setProjectName('')
+    setProjectList(listProjects())
+  }
+
+  // 管理モーダルからリネーム
+  function handleRenameProject(oldName: string) {
+    const newName = prompt('新しいプロジェクト名', oldName)
+    if (!newName || newName === oldName) return
+    const ok = renameProject(oldName, newName)
+    if (!ok) { alert('その名前は既に使われています'); return }
+    if (projectName === oldName) setProjectName(newName)
+    setProjectList(listProjects())
+  }
+
+  // 新規プロジェクト（現在の内容をクリア）
+  function handleNewProject() {
+    // 現在の内容をクリア
+    setPins([])
+    overlayStateRef.current = null
+    setOverlayLoaded(false)
+    setOverlayLog('')
+    setSiteName('')
+    setProjectName('')
+    setProjectSaveStatus('新規プロジェクトを開始しました')
+    setTimeout(() => setProjectSaveStatus(''), 3000)
+  }
+
   // 地図のpan/zoomイベントで図面を追従させる
   useEffect(() => {
     const map = mapRef.current
@@ -1157,12 +1203,11 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
 
         {/* 保存系（地図モードでは未実装のためグレーアウト）*/}
-        {/* 上書き保存・別名保存（機能する）*/}
+        {/* 上書き保存・別名保存・管理・新規（すべて機能）*/}
         <button onClick={handleSaveProject} style={mapToolbarBtnStyle}>💾 上書き保存</button>
         <button onClick={handleSaveAsProject} style={mapToolbarBtnStyle}>📋 別名保存</button>
-        {/* 管理・新規はStep3で実装予定 */}
-        <button disabled title="次のステップで対応予定" style={disabledBtnStyle}>📂 管理</button>
-        <button disabled title="次のステップで対応予定" style={disabledBtnStyle}>新規プロジェクト</button>
+        <button onClick={openManager} style={mapToolbarBtnStyle}>📂 管理</button>
+        <button onClick={handleNewProject} style={mapToolbarBtnStyle}>新規プロジェクト</button>
         {/* 現在のプロジェクト名 */}
         {projectName && <span style={{ fontSize: 12, color: '#6b7280' }}>{projectName}</span>}
         {/* 保存ステータス */}
@@ -1561,6 +1606,79 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         </div>
       </div>
       </div>
+
+      {/* ===== プロジェクト管理モーダル ===== */}
+      {showManager && (
+        <div
+          onClick={() => setShowManager(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'white', borderRadius: 10, width: 560, maxWidth: '95vw', maxHeight: '85vh',
+              display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+            }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '1px solid #e5e7eb' }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>📂 プロジェクト管理</h3>
+              <button onClick={() => setShowManager(false)}
+                style={{ background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: '#666', lineHeight: 1 }}>×</button>
+            </div>
+
+            <div style={{ overflow: 'auto', flex: 1, padding: 14 }}>
+              {projectList.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#999', padding: '40px 0', fontSize: 13 }}>
+                  保存済みのプロジェクトはありません。<br />「別名保存」で現在の作業を保存できます。
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {projectList.map(meta => (
+                    <div key={meta.name}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12, padding: 10,
+                        border: '1px solid #e5e7eb', borderRadius: 8,
+                        background: meta.name === projectName ? '#E0F5EC' : 'white',
+                      }}>
+                      {/* サムネイル */}
+                      <div style={{ width: 64, height: 48, flexShrink: 0, borderRadius: 4, overflow: 'hidden', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {meta.thumbnail
+                          ? <img src={meta.thumbnail} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          : <span style={{ fontSize: 20, color: '#ccc' }}>📄</span>}
+                      </div>
+                      {/* 情報 */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {meta.name}
+                          {meta.name === projectName && <span style={{ fontSize: 10, color: '#0F6E56', marginLeft: 6 }}>開いています</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                          ピン{meta.pinCount}件{meta.hasOverlay ? '・図面あり' : ''}・{new Date(meta.updatedAt).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                      {/* 操作 */}
+                      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                        <button onClick={() => handleOpenProject(meta.name)}
+                          style={{ fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4, border: 'none', background: '#1D9E75', color: 'white', cursor: 'pointer' }}>開く</button>
+                        <button onClick={() => handleRenameProject(meta.name)}
+                          style={{ fontSize: 12, padding: '4px 8px', borderRadius: 4, border: '1px solid #ccc', background: 'white', color: '#555', cursor: 'pointer' }}>名前</button>
+                        <button onClick={() => handleDeleteProject(meta.name)}
+                          style={{ fontSize: 12, padding: '4px 8px', borderRadius: 4, border: '1px solid #e0a0a0', background: 'white', color: '#c00', cursor: 'pointer' }}>削除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: '10px 18px', borderTop: '1px solid #e5e7eb', textAlign: 'right' }}>
+              <button onClick={() => setShowManager(false)}
+                style={{ fontSize: 13, fontWeight: 600, padding: '6px 16px', borderRadius: 6, background: '#f0f0f0', color: '#555', border: '1px solid #ccc', cursor: 'pointer' }}>閉じる</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
