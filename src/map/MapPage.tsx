@@ -58,11 +58,14 @@ const mapToolbarBtnStyle: CSSProperties = {
 }
 
 // 保存状態（表示文言とは分離。文言を変えてもロジックは不変）
-enum SaveState {
-  NEW,    // まだ一度も保存していない
-  SAVED,  // 保存済み・変更なし
-  DIRTY,  // 保存後に変更あり
-}
+// enum は erasableSyntaxOnly（tsconfig）で禁止のため、const オブジェクト + 型で表現。
+// SaveState.NEW / SAVED / DIRTY の参照は従来どおり動作する。
+const SaveState = {
+  NEW: 'NEW',     // まだ一度も保存していない
+  SAVED: 'SAVED', // 保存済み・変更なし
+  DIRTY: 'DIRTY', // 保存後に変更あり
+} as const
+type SaveState = typeof SaveState[keyof typeof SaveState]
 
 // 地図モード専用：通常写真をOpenSeadragonで開く /viewer?type=image URLを組み立てる
 // （共通関数 getPinPdfLinkUrl は変更せず、表示先の切替を地図モードに閉じ込める）
