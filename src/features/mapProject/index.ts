@@ -17,6 +17,29 @@ export const MAP_PROJECT_VERSION = 1
 export const MAP_LS_KEY = 'photolinkmap_map_projects'
 export const MAP_LAST_PROJECT_KEY = 'photolinkmap_map_last_project'
 
+// データ構造のスキーマ版（整数）。アプリのバージョンとは分離して管理する。
+// データ構造を変更したらこの数値を上げ、migrateProject に変換を追加する。
+export const CURRENT_SCHEMA = 1
+
+// JSONファイルのメタ情報（5年後でも判別できるように付与する固定値）
+export const JSON_FORMAT_ID = 'photolinkmap-map-project'
+export const JSON_APP_NAME = 'PhotoLinkMap'
+
+// UUID生成（プロジェクトの永続識別子）。crypto.randomUUID が無い環境向けにフォールバックも用意
+function generateProjectId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+  } catch { /* fallthrough */ }
+  // フォールバック（RFC4122 v4 風）
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 // localStorage の実用上の安全上限（保守的に 4.5MB とする。多くのブラウザは 5MB 前後）
 const LS_SAFE_LIMIT_BYTES = 4.5 * 1024 * 1024
 
@@ -52,7 +75,8 @@ export interface SavedOverlay {
 
 /** localStorage に保存する 1 プロジェクトの完全な形 */
 export interface MapProject {
-  version: number
+  version: number       // データ構造のスキーマ版（= schema。CURRENT_SCHEMA と対応）
+  projectId: string     // プロジェクトの永続的な一意識別子（UUID）。名前では同一性を判定しない
   name: string
   createdAt: string
   updatedAt: string
@@ -100,16 +124,17 @@ export interface MapState {
 
 /**
  * MapState → MapProject（保存用オブジェクトを組み立てる。localStorage 書き込みはしない）
- * createdAt は新規時のみ。既存更新時は既存の createdAt を渡す。
+ * createdAt / projectId は新規時のみ生成。既存更新時は既存の値を opts で渡す。
  */
 export function serializeProject(
   state: MapState,
   name: string,
-  opts?: { createdAt?: string },
+  opts?: { createdAt?: string; projectId?: string },
 ): MapProject {
   const now = new Date().toISOString()
   return {
-    version: MAP_PROJECT_VERSION,
+    version: CURRENT_SCHEMA,
+    projectId: opts?.projectId ?? generateProjectId(),
     name,
     createdAt: opts?.createdAt ?? now,
     updatedAt: now,
@@ -165,19 +190,25 @@ export function deserializeProject(project: MapProject): MapState {
 // ===== バージョン変換 =====
 
 /**
- * 読み込んだ生データを最新バージョンへ移行する。
- * 将来 version 2, 3 と増えたら、ここに変換を追加していく。
+ * 読み込んだ生データを最新スキーマへ移行する。
+ * - version(schema) 未設定の古いデータは 1 とみなす
+ * - projectId 未設定の古いデータには UUID を自動付与する（既存 localStorage データの移行）
+ * 将来 schema 2, 3 と増えたら、ここに変換を追加していく。
  */
 export function migrateProject(raw: any): MapProject {
   let p = raw
   if (typeof p !== 'object' || p === null) {
     throw new Error('プロジェクトデータが不正です')
   }
-  // version 未設定の古いデータは version 1 とみなす
+  // schema(version) 未設定の古いデータは 1 とみなす
   if (typeof p.version !== 'number') {
     p = { ...p, version: 1 }
   }
-  // 例: 将来 version 2 で構造が変わったらここで変換
+  // projectId 未設定の古いデータには UUID を自動付与（名前では同一性を判定しないため）
+  if (typeof p.projectId !== 'string' || !p.projectId) {
+    p = { ...p, projectId: generateProjectId() }
+  }
+  // 例: 将来 schema 2 で構造が変わったらここで変換
   // if (p.version === 1) { p = convertV1ToV2(p); }
   return p as MapProject
 }
@@ -335,4 +366,91 @@ export function getLastProjectName(): string | null {
 
 export function clearLastProject(): void {
   try { localStorage.removeItem(MAP_LAST_PROJECT_KEY) } catch { /* ignore */ }
+}
+
+// ===== JSON エクスポート / インポート =====
+
+/** JSONファイルに書き出す最上位オブジェクト（メタ情報 + プロジェクト本体） */
+export interface ExportedJson {
+  _format: string
+  _app: string
+  _schema: number
+  _exportedAt: string
+  project: MapProject
+}
+
+/**
+ * MapProject を、メタ情報付きの JSON 文字列にする（純粋関数）。
+ * projectId が無ければ付与する（Export 時は必ず存在する前提を満たすため）。
+ */
+export function exportProjectJson(project: MapProject): string {
+  const withId: MapProject = project.projectId
+    ? project
+    : { ...project, projectId: generateProjectId() }
+  const payload: ExportedJson = {
+    _format: JSON_FORMAT_ID,
+    _app: JSON_APP_NAME,
+    _schema: CURRENT_SCHEMA,
+    _exportedAt: new Date().toISOString(),
+    project: withId,
+  }
+  return JSON.stringify(payload, null, 2)
+}
+
+/** インポート結果 */
+export type ImportResult =
+  | { ok: true; project: MapProject }
+  | { ok: false; reason: 'parse' | 'format' | 'schema-too-new' | 'invalid'; message: string }
+
+/**
+ * JSON文字列を検証して MapProject を取り出す（純粋関数）。
+ * - JSONとして壊れていないか
+ * - _format が PhotoLinkMap のものか
+ * - _schema が新しすぎないか（> CURRENT_SCHEMA はエラー）
+ * - 問題なければ migrateProject で現行スキーマへ変換
+ */
+export function parseImportedJson(text: string): ImportResult {
+  let data: any
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return { ok: false, reason: 'parse', message: 'ファイルを読み込めませんでした。JSONが壊れている可能性があります。' }
+  }
+  if (typeof data !== 'object' || data === null) {
+    return { ok: false, reason: 'invalid', message: 'ファイルの内容が正しくありません。' }
+  }
+  // 形式の確認（誤読み込み防止）
+  if (data._format !== JSON_FORMAT_ID) {
+    return { ok: false, reason: 'format', message: 'これはPhotoLinkMapの地図プロジェクトファイルではありません。' }
+  }
+  // スキーマが新しすぎる場合はアプリ更新を促す
+  const schema = typeof data._schema === 'number' ? data._schema : (data.project?.version ?? 1)
+  if (schema > CURRENT_SCHEMA) {
+    return { ok: false, reason: 'schema-too-new', message: 'このファイルは新しいバージョンで作成されています。アプリを更新してください。' }
+  }
+  // プロジェクト本体を取り出して移行
+  const rawProject = data.project ?? data // 後方互換: project ネストが無い形も一応許容
+  try {
+    const project = migrateProject(rawProject)
+    // 最低限の妥当性チェック
+    if (!Array.isArray(project.pins)) {
+      return { ok: false, reason: 'invalid', message: 'プロジェクトデータが壊れています（pinsがありません）。' }
+    }
+    return { ok: true, project }
+  } catch {
+    return { ok: false, reason: 'invalid', message: 'プロジェクトデータを復元できませんでした。' }
+  }
+}
+
+/**
+ * ダウンロード用のファイル名を作る（世代管理のため日時付き）。
+ * 例: A邸新築_20260703_153025_photolinkmap.json
+ */
+export function makeExportFileName(name: string): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  // ファイル名に使えない文字を除去
+  const safeName = (name || 'project').replace(/[\\/:*?"<>|]/g, '_')
+  return `${safeName}_${ts}_photolinkmap.json`
 }
