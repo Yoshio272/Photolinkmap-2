@@ -3,13 +3,11 @@
  * fit/zoom/render を一本化し、背景形式を意識させない設計
  */
 import * as pdfjsLib from 'pdfjs-dist'
+import { PDFJS_WORKER_SRC, PDFJS_CMAP_URL } from './pdfjsCdn'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url
-).toString()
+pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC
 
-const CMAP_URL = new URL('pdfjs-dist/cmaps/', import.meta.url).toString()
+const CMAP_URL = PDFJS_CMAP_URL
 
 export type BgType = 'pdf' | 'image'
 
