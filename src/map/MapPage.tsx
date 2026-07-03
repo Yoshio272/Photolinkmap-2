@@ -32,6 +32,7 @@ import {
   listProjects, deleteProject, renameProject,
   rememberLastProject, getLastProjectName, type MapState, type MapProjectMeta,
 } from '../features/mapProject'
+import { PDFJS_WORKER_SRC, PDFJS_CMAP_URL, PDFJS_STANDARD_FONTS_URL } from '../services/pdfjsCdn'
 
 // 地理院 航空写真タイル（APIキー不要・商用可）
 const GSI_PHOTO_URL = 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'
@@ -712,9 +713,9 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
       // CAD系PDFはCIDフォントが壊れていることが多く、フォント処理で描画が落ちやすい。
       // オーバーレイ用途では図面の線・形状が見えれば十分なので、フォント処理を堅牢化する。
       const pdfjsLib = await import('pdfjs-dist')
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString()
-      const cMapUrl = new URL('pdfjs-dist/cmaps/', import.meta.url).toString()
-      const standardFontDataUrl = new URL('pdfjs-dist/standard_fonts/', import.meta.url).toString()
+      pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC
+      const cMapUrl = PDFJS_CMAP_URL
+      const standardFontDataUrl = PDFJS_STANDARD_FONTS_URL
       const ab = await file.arrayBuffer()
       const doc = await pdfjsLib.getDocument({
         data: new Uint8Array(ab),
