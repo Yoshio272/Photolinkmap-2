@@ -90,10 +90,18 @@ interface MapPin {
 // 外部スクリプト/CSS動的ロード（package.json不変）
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve()
+    const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null
+    if (existing) {
+      // 既にタグがある場合、読み込み完了済みなら即resolve、まだなら完了を待つ。
+      // （StrictModeの二重実行で「タグはあるが読み込み未完了」の状態を正しく扱う）
+      if (existing.dataset.loaded === 'true') return resolve()
+      existing.addEventListener('load', () => resolve())
+      existing.addEventListener('error', () => reject(new Error(`load failed: ${src}`)))
+      return
+    }
     const s = document.createElement('script')
     s.src = src
-    s.onload = () => resolve()
+    s.onload = () => { s.dataset.loaded = 'true'; resolve() }
     s.onerror = () => reject(new Error(`load failed: ${src}`))
     document.head.appendChild(s)
   })
@@ -224,6 +232,10 @@ export function MapPage() {
       await loadScript('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js')
       if (cancelled || !mapElRef.current) return
       const L = (window as any).L
+      // Leaflet本体が未読み込みなら中断（StrictMode二重実行対策の保険）
+      if (!L || typeof L.map !== 'function') return
+      // 既に地図が初期化済みなら二重に作らない（二重実行対策）
+      if (mapRef.current) return
       // zoomControl:false で標準の左上ズームを無効化し、右上に再配置（方位マークの下）
       const map = L.map(mapElRef.current, { maxZoom: 21, zoomControl: false }).setView([35.681236, 139.767125], 18)
       const initialDef = BASE_MAPS.find(b => b.key === 'photo')!
