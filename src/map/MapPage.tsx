@@ -31,6 +31,7 @@ import {
   serializeProject, deserializeProject, saveProject, loadProject,
   listProjects, deleteProject, renameProject,
   exportProjectJson, makeExportFileName, parseImportedJson,
+  saveAutoBackup,
   rememberLastProject, getLastProjectName, type MapState, type MapProjectMeta,
 } from '../features/mapProject'
 import { PDFJS_WORKER_SRC, PDFJS_CMAP_URL, PDFJS_STANDARD_FONTS_URL } from '../services/pdfjsCdn'
@@ -202,6 +203,8 @@ export function MapPage() {
   const [saveState, setSaveState] = useState<SaveState>(SaveState.NEW) // 保存状態
   const [lastSavedAt, setLastSavedAt] = useState<string>('') // 最終保存日時（ISO）
   const [showSaveInfo, setShowSaveInfo] = useState(false) // 保存情報ダイアログ
+  // 開く確認ダイアログ（parseImportedJson成功後、ユーザーの確認を待つ）
+  const [pendingImport, setPendingImport] = useState<{ project: import('../features/mapProject').MapProject; handle: any; fileName: string } | null>(null)
   const [lastProjectPrompt, setLastProjectPrompt] = useState<string | null>(null) // 起動時の前回案内
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
@@ -1096,28 +1099,23 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
       }
       const project = result.project
 
-      // 確認ダイアログ（プロジェクト名・現場名・保存日時・バージョン・schema）
-      const info = [
-        `このプロジェクトを読み込みますか？`,
-        ``,
-        `プロジェクト名：${project.name}`,
-        `現場名：${project.siteName || '（未設定）'}`,
-        `保存日時：${new Date(project.updatedAt).toLocaleString('ja-JP')}`,
-        `PhotoLinkMap形式 / schema: ${project.version}`,
-      ].join('\n')
-      if (!confirm(info)) return
-
-      // 復元
-      applyProject(project)
-      // ファイルハンドルを保持（同じファイルへ上書き保存できる）
-      currentFileHandleRef.current = handle
-      setCurrentFileName(handle?.name ?? '')
-      // localStorage にも同期（バックアップ）
-      backupToLocalStorage(project)
+      // 確認はモーダルで行う（pendingImportにセット → 確認ダイアログ表示）
+      setPendingImport({ project, handle, fileName: handle?.name ?? '' })
     } catch (e: any) {
       if (e?.name === 'AbortError' || e?.message === 'cancelled') return // キャンセルは静かに
       alert('ファイルを読み込めませんでした：' + (e instanceof Error ? e.message : ''))
     }
+  }
+
+  // 開く確認ダイアログで「読み込む」を押した時の復元処理
+  function confirmImport() {
+    if (!pendingImport) return
+    const { project, handle, fileName } = pendingImport
+    applyProject(project)
+    currentFileHandleRef.current = handle       // 同じファイルへ上書き保存できる
+    setCurrentFileName(fileName)
+    backupToLocalStorage(project)               // localStorageにも同期
+    setPendingImport(null)
   }
 
   // 新規プロジェクト（現在の内容をクリア）
@@ -1153,6 +1151,21 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     // 保存済みだったものに変更が入ったら「変更あり」に。新規(NEW)は新規のまま
     setSaveState(prev => prev === SaveState.SAVED ? SaveState.DIRTY : prev)
   }, [pins, siteName, baseMap, overlayLoaded, overlayRotation, overlayScalePct, overlayOpacity])
+
+  // Auto Backup：最後の変更から30秒後に localStorage へ自動保存（クラッシュ復旧用）。
+  // 変更が続く間はタイマーがリセットされ、連続編集中は保存されない（デバウンス）。
+  useEffect(() => {
+    if (suppressDirtyRef.current) return
+    if (saveState === SaveState.SAVED) return // 変更が無ければ不要
+    const timer = setTimeout(async () => {
+      try {
+        const name = projectName || '（自動保存）'
+        const project = await buildCurrentProject(name)
+        saveAutoBackup(project)
+      } catch { /* 自動保存の失敗は無視（本保存に影響させない）*/ }
+    }, 30000)
+    return () => clearTimeout(timer)
+  }, [pins, siteName, baseMap, overlayLoaded, overlayRotation, overlayScalePct, overlayOpacity, saveState, projectName])
 
   // 起動時：前回開いていたプロジェクト名があれば案内を出す（自動復元はしない）
   useEffect(() => {
@@ -1895,6 +1908,48 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
               style={{ width: '100%', marginTop: 16, padding: 10, fontSize: 14, fontWeight: 600, background: '#1D9E75', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
               閉じる
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== 開く確認ダイアログ（読み込み前にプロジェクト情報を表示）===== */}
+      {pendingImport && (
+        <div
+          onClick={() => setPendingImport(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: 'white', borderRadius: 10, padding: 20, width: 400, maxWidth: '92vw', boxShadow: '0 8px 32px rgba(0,0,0,0.25)' }}>
+            <h3 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 700 }}>このプロジェクトを読み込みますか？</h3>
+            <div style={{ fontSize: 13 }}>
+              {([
+                ['プロジェクト名', pendingImport.project.name || '（未設定）'],
+                ['現場名', pendingImport.project.siteName || '（未設定）'],
+                ['保存日時', new Date(pendingImport.project.updatedAt).toLocaleString('ja-JP')],
+                ['ピン数', `${pendingImport.project.pins.length}件`],
+                ['図面', pendingImport.project.overlay ? 'あり' : 'なし'],
+                ['形式', `PhotoLinkMap / schema ${pendingImport.project.version}`],
+              ] as Array<[string, string]>).map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', padding: '5px 0', borderBottom: '1px solid #f0f0f0' }}>
+                  <div style={{ width: 90, color: '#888', flexShrink: 0 }}>{k}</div>
+                  <div style={{ color: '#333', wordBreak: 'break-all' }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            {isDirty && (
+              <div style={{ marginTop: 12, fontSize: 12, color: '#c0392b', background: '#fdecea', padding: 8, borderRadius: 6 }}>
+                ※ 現在のプロジェクトに未保存の変更があります。読み込むと失われます。
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button onClick={() => setPendingImport(null)}
+                style={{ flex: 1, padding: 10, fontSize: 14, fontWeight: 600, background: '#f0f0f0', color: '#555', border: '1px solid #ccc', borderRadius: 6, cursor: 'pointer' }}>
+                キャンセル
+              </button>
+              <button onClick={confirmImport}
+                style={{ flex: 1, padding: 10, fontSize: 14, fontWeight: 600, background: '#1D9E75', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+                読み込む
+              </button>
+            </div>
           </div>
         </div>
       )}
