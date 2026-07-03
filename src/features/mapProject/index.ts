@@ -368,6 +368,44 @@ export function clearLastProject(): void {
   try { localStorage.removeItem(MAP_LAST_PROJECT_KEY) } catch { /* ignore */ }
 }
 
+// ===== Auto Backup（クラッシュ復旧用の単一スロット。名前付き保存とは独立）=====
+
+export const MAP_AUTOSAVE_KEY = 'photolinkmap_map_autosave'
+
+/** 自動バックアップを保存する（容量超過時は図面画像を落として再試行） */
+export function saveAutoBackup(project: MapProject): boolean {
+  try {
+    localStorage.setItem(MAP_AUTOSAVE_KEY, JSON.stringify(project))
+    return true
+  } catch {
+    // 容量超過時は図面画像を除いて再試行
+    try {
+      if (project.overlay?.dataUrl) {
+        const light = { ...project, overlay: { ...project.overlay, dataUrl: null } }
+        localStorage.setItem(MAP_AUTOSAVE_KEY, JSON.stringify(light))
+        return true
+      }
+    } catch { /* give up */ }
+    return false
+  }
+}
+
+/** 自動バックアップを読み込む（無ければ null） */
+export function loadAutoBackup(): MapProject | null {
+  try {
+    const raw = localStorage.getItem(MAP_AUTOSAVE_KEY)
+    if (!raw) return null
+    return migrateProject(JSON.parse(raw))
+  } catch {
+    return null
+  }
+}
+
+/** 自動バックアップを消す */
+export function clearAutoBackup(): void {
+  try { localStorage.removeItem(MAP_AUTOSAVE_KEY) } catch { /* ignore */ }
+}
+
 // ===== JSON エクスポート / インポート =====
 
 /** JSONファイルに書き出す最上位オブジェクト（メタ情報 + プロジェクト本体） */
