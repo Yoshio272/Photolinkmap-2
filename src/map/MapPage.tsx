@@ -852,10 +852,10 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
   }
 
   // 保存の共通処理（完全/フォールバックの結果をメッセージ表示）
-  async function doSaveProject(name: string, createdAt?: string) {
+  async function doSaveProject(name: string, opts?: { createdAt?: string; projectId?: string }) {
     setProjectSaveStatus('保存中...')
     const state = await collectMapState()
-    const project = serializeProject(state, name, { createdAt })
+    const project = serializeProject(state, name, opts)
     const res = saveProject(project)
     if (res.ok && res.mode === 'full') {
       setProjectName(name)
@@ -877,7 +877,7 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
   async function handleSaveProject() {
     if (!projectName) { handleSaveAsProject(); return }
     const existing = loadProject(projectName)
-    await doSaveProject(projectName, existing?.createdAt)
+    await doSaveProject(projectName, { createdAt: existing?.createdAt, projectId: existing?.projectId })
   }
 
   // 別名保存
