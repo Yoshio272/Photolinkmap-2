@@ -30,6 +30,7 @@ import { StorageSettingsButton } from '../components/Storage/StorageSettingsButt
 import {
   serializeProject, deserializeProject, saveProject, loadProject,
   listProjects, deleteProject, renameProject,
+  exportProjectJson, makeExportFileName, parseImportedJson,
   rememberLastProject, getLastProjectName, type MapState, type MapProjectMeta,
 } from '../features/mapProject'
 import { PDFJS_WORKER_SRC, PDFJS_CMAP_URL, PDFJS_STANDARD_FONTS_URL } from '../services/pdfjsCdn'
@@ -53,6 +54,13 @@ const mapToolbarBtnStyle: CSSProperties = {
   fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 4,
   border: '1px solid #d1d5db', background: 'white', color: '#374151', cursor: 'pointer',
   whiteSpace: 'nowrap',
+}
+
+// 保存状態（表示文言とは分離。文言を変えてもロジックは不変）
+enum SaveState {
+  NEW,    // まだ一度も保存していない
+  SAVED,  // 保存済み・変更なし
+  DIRTY,  // 保存後に変更あり
 }
 
 // 地図モード専用：通常写真をOpenSeadragonで開く /viewer?type=image URLを組み立てる
@@ -186,6 +194,14 @@ export function MapPage() {
   const [projectList, setProjectList] = useState<MapProjectMeta[]>([]) // 保存済み一覧
   const [isDirty, setIsDirty] = useState(false) // 未保存の変更があるか
   const suppressDirtyRef = useRef(true) // 読込・保存・初期化中はdirtyを立てない
+  // ファイルベース保存（ファイル＝正、localStorage＝バックアップ）
+  const currentFileHandleRef = useRef<any>(null) // FileSystemFileHandle（同じファイルへ上書き用）
+  const currentProjectIdRef = useRef<string | null>(null) // 現在のプロジェクトの永続ID
+  const currentCreatedAtRef = useRef<string | null>(null) // 現在のプロジェクトの作成日時
+  const [currentFileName, setCurrentFileName] = useState<string>('') // 表示用ファイル名
+  const [saveState, setSaveState] = useState<SaveState>(SaveState.NEW) // 保存状態
+  const [lastSavedAt, setLastSavedAt] = useState<string>('') // 最終保存日時（ISO）
+  const [showSaveInfo, setShowSaveInfo] = useState(false) // 保存情報ダイアログ
   const [lastProjectPrompt, setLastProjectPrompt] = useState<string | null>(null) // 起動時の前回案内
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
@@ -864,46 +880,94 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     }
   }
 
-  // 保存の共通処理（完全/フォールバックの結果をメッセージ表示）
-  async function doSaveProject(name: string, opts?: { createdAt?: string; projectId?: string }) {
-    setProjectSaveStatus('保存中...')
+  // ===== 保存（ファイル＝正、localStorage＝バックアップ）=====
+
+  // localStorageへのバックアップ保存（ファイル保存とは独立して呼べる）
+  function backupToLocalStorage(project: import('../features/mapProject').MapProject) {
+    try {
+      const res = saveProject(project)
+      return res.ok
+    } catch { return false }
+  }
+
+  // 現在の状態から MapProject を作る（projectId/createdAtを継承）
+  async function buildCurrentProject(name: string) {
     const state = await collectMapState()
-    const project = serializeProject(state, name, opts)
-    const res = saveProject(project)
-    if (res.ok && res.mode === 'full') {
-      setProjectName(name)
-      rememberLastProject(name)
-      setIsDirty(false)
-      setProjectSaveStatus(`✓ 「${name}」を保存しました`)
-    } else if (res.ok && res.mode === 'fallback') {
-      setProjectName(name)
-      rememberLastProject(name)
-      setIsDirty(false)
-      setProjectSaveStatus(`✓ 「${name}」を保存しました（図面画像は容量超過のため位置情報のみ）`)
-    } else {
-      setProjectSaveStatus(`❌ 保存に失敗しました: ${res.error ?? ''}`)
+    return serializeProject(state, name, {
+      projectId: currentProjectIdRef.current ?? undefined,
+      createdAt: currentCreatedAtRef.current ?? undefined,
+    })
+  }
+
+  // 保存後の共通後処理
+  function afterSaved(project: import('../features/mapProject').MapProject, fileName: string) {
+    currentProjectIdRef.current = project.projectId
+    currentCreatedAtRef.current = project.createdAt
+    setCurrentFileName(fileName)
+    setSaveState(SaveState.SAVED)
+    setIsDirty(false)
+    setLastSavedAt(new Date().toISOString())
+    setProjectName(project.name)
+    rememberLastProject(project.name)
+    backupToLocalStorage(project) // localStorageにもバックアップ
+  }
+
+  // 💾 保存：ファイルへ保存（対応ブラウザはダイアログ/上書き、非対応はダウンロード）
+  async function handleSave() {
+    // プロジェクト名（JSON内の識別子。ファイル名とは独立）
+    let name = projectName
+    if (!name) {
+      const input = prompt('プロジェクト名を入力してください（例：横浜駅西口再開発）', siteName || '')
+      if (!input) return
+      name = input
+    }
+
+    setProjectSaveStatus('保存中...')
+    try {
+      const project = await buildCurrentProject(name)
+      const json = exportProjectJson(project)
+
+      const canUseFsApi = typeof (window as any).showSaveFilePicker === 'function'
+
+      if (canUseFsApi) {
+        // File System Access API 対応（Chrome / Edge）
+        let handle = currentFileHandleRef.current
+        if (!handle) {
+          // 初回：保存ダイアログでファイルを選ぶ
+          handle = await (window as any).showSaveFilePicker({
+            suggestedName: makeExportFileName(name),
+            types: [{ description: 'PhotoLinkMap Project', accept: { 'application/json': ['.json'] } }],
+          })
+          currentFileHandleRef.current = handle
+        }
+        // 同じファイルへ書き込み（2回目以降は上書き）
+        const writable = await handle.createWritable()
+        await writable.write(json)
+        await writable.close()
+        afterSaved(project, handle.name ?? makeExportFileName(name))
+        setProjectSaveStatus(`✓ 保存しました`)
+      } else {
+        // 非対応（Safari / Firefox）：ダウンロード
+        const fileName = makeExportFileName(name)
+        const blob = new Blob([json], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url; a.download = fileName
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        afterSaved(project, fileName)
+        setProjectSaveStatus(`✓ 「${fileName}」をダウンロードしました`)
+      }
+    } catch (e: any) {
+      // ユーザーがダイアログをキャンセルした場合は静かに中断
+      if (e?.name === 'AbortError') { setProjectSaveStatus(''); return }
+      setProjectSaveStatus(`❌ 保存に失敗しました: ${e instanceof Error ? e.message : ''}`)
     }
     setTimeout(() => setProjectSaveStatus(''), 4000)
   }
 
-  // 上書き保存（未保存なら別名保存にフォールバック）
-  async function handleSaveProject() {
-    if (!projectName) { handleSaveAsProject(); return }
-    const existing = loadProject(projectName)
-    await doSaveProject(projectName, { createdAt: existing?.createdAt, projectId: existing?.projectId })
-  }
-
-  // 別名保存
-  async function handleSaveAsProject() {
-    const name = prompt('プロジェクト名を入力してください', projectName || siteName || '')
-    if (!name) return
-    await doSaveProject(name)
-  }
-
-  // プロジェクトを読み込んで画面状態に復元（Step3の管理モーダルから呼ぶ）
-  function applyLoadedProject(name: string) {
-    const project = loadProject(name)
-    if (!project) { setProjectSaveStatus('❌ プロジェクトが見つかりません'); return }
+  // 読み込んだ MapProject を画面状態に復元する（ファイル/localStorage 共通）
+  function applyProject(project: import('../features/mapProject').MapProject) {
     suppressDirtyRef.current = true // 読込中の変更でdirtyを立てない
     const state: MapState = deserializeProject(project)
     // 地図位置
@@ -939,21 +1003,30 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         setOverlayLog('※ この案件は図面画像が保存されていません（位置情報のみ）。図面を再読込してください')
       }
     }
-    setProjectName(name)
-    rememberLastProject(name)
-    setProjectSaveStatus(`✓ 「${name}」を開きました`)
+    setProjectName(project.name)
+    rememberLastProject(project.name)
+    // 現在のプロジェクトの識別情報を保持（上書き保存・情報表示用）
+    currentProjectIdRef.current = project.projectId
+    currentCreatedAtRef.current = project.createdAt
+    setSaveState(SaveState.SAVED)
+    setProjectSaveStatus(`✓ 「${project.name}」を開きました`)
     setTimeout(() => setProjectSaveStatus(''), 3000)
     // 読込完了後、dirtyをリセットして監視を再開
     setIsDirty(false)
     setTimeout(() => { suppressDirtyRef.current = false }, 200)
   }
 
-  // 管理モーダルを開く（一覧を読み込む）
-  function openManager() {
-    setProjectList(listProjects())
-    setShowManager(true)
+  // localStorage/管理モーダルから名前で開く（従来経路）
+  function applyLoadedProject(name: string) {
+    const project = loadProject(name)
+    if (!project) { setProjectSaveStatus('❌ プロジェクトが見つかりません'); return }
+    currentFileHandleRef.current = null // localStorage由来はファイルハンドル無し
+    setCurrentFileName('')
+    applyProject(project)
   }
 
+  // 管理モーダル（localStorageバックアップ一覧）は将来のバックアップ復元UI用にコードを残す。
+  // ファイルベース保存に統一したため、現在はヘッダーからの導線を持たない（openManagerは撤去）。
   // 管理モーダルから開く
   function handleOpenProject(name: string) {
     if (isDirty && !confirm('保存していない変更があります。別のプロジェクトを開くと失われます。よろしいですか？')) {
@@ -981,6 +1054,72 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     setProjectList(listProjects())
   }
 
+  // 📂 開く：JSONファイルを選んで読み込む
+  async function handleOpen() {
+    if (isDirty && !confirm('保存していない変更があります。ファイルを開くと失われます。よろしいですか？')) {
+      return
+    }
+    try {
+      let text: string
+      let handle: any = null
+      const canUseFsApi = typeof (window as any).showOpenFilePicker === 'function'
+
+      if (canUseFsApi) {
+        const [h] = await (window as any).showOpenFilePicker({
+          types: [{ description: 'PhotoLinkMap Project', accept: { 'application/json': ['.json'] } }],
+        })
+        handle = h
+        const file = await h.getFile()
+        text = await file.text()
+      } else {
+        // 非対応：input[type=file] で選択
+        text = await new Promise<string>((resolve, reject) => {
+          const input = document.createElement('input')
+          input.type = 'file'; input.accept = '.json,application/json'
+          input.onchange = () => {
+            const f = input.files?.[0]
+            if (!f) { reject(new Error('cancelled')); return }
+            const reader = new FileReader()
+            reader.onload = () => resolve(String(reader.result))
+            reader.onerror = () => reject(new Error('read failed'))
+            reader.readAsText(f)
+          }
+          input.click()
+        })
+      }
+
+      // 検証
+      const result = parseImportedJson(text)
+      if (!result.ok) {
+        alert(result.message)
+        return
+      }
+      const project = result.project
+
+      // 確認ダイアログ（プロジェクト名・現場名・保存日時・バージョン・schema）
+      const info = [
+        `このプロジェクトを読み込みますか？`,
+        ``,
+        `プロジェクト名：${project.name}`,
+        `現場名：${project.siteName || '（未設定）'}`,
+        `保存日時：${new Date(project.updatedAt).toLocaleString('ja-JP')}`,
+        `PhotoLinkMap形式 / schema: ${project.version}`,
+      ].join('\n')
+      if (!confirm(info)) return
+
+      // 復元
+      applyProject(project)
+      // ファイルハンドルを保持（同じファイルへ上書き保存できる）
+      currentFileHandleRef.current = handle
+      setCurrentFileName(handle?.name ?? '')
+      // localStorage にも同期（バックアップ）
+      backupToLocalStorage(project)
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || e?.message === 'cancelled') return // キャンセルは静かに
+      alert('ファイルを読み込めませんでした：' + (e instanceof Error ? e.message : ''))
+    }
+  }
+
   // 新規プロジェクト（現在の内容をクリア）
   function handleNewProject() {
     // 未保存の変更がある場合は確認
@@ -996,6 +1135,12 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     setSiteName('')
     setProjectName('')
     setIsDirty(false)
+    // ファイルベースの識別情報もリセット
+    currentFileHandleRef.current = null
+    currentProjectIdRef.current = null
+    currentCreatedAtRef.current = null
+    setCurrentFileName('')
+    setSaveState(SaveState.NEW)
     setProjectSaveStatus('新規プロジェクトを開始しました')
     setTimeout(() => setProjectSaveStatus(''), 3000)
     setTimeout(() => { suppressDirtyRef.current = false }, 100)
@@ -1005,6 +1150,8 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
   useEffect(() => {
     if (suppressDirtyRef.current) return
     setIsDirty(true)
+    // 保存済みだったものに変更が入ったら「変更あり」に。新規(NEW)は新規のまま
+    setSaveState(prev => prev === SaveState.SAVED ? SaveState.DIRTY : prev)
   }, [pins, siteName, baseMap, overlayLoaded, overlayRotation, overlayScalePct, overlayOpacity])
 
   // 起動時：前回開いていたプロジェクト名があれば案内を出す（自動復元はしない）
@@ -1264,15 +1411,28 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
 
         {/* 保存系（地図モードでは未実装のためグレーアウト）*/}
-        {/* 上書き保存・別名保存・管理・新規（すべて機能）*/}
-        <button onClick={handleSaveProject} style={mapToolbarBtnStyle}>💾 上書き保存</button>
-        <button onClick={handleSaveAsProject} style={mapToolbarBtnStyle}>📋 別名保存</button>
-        <button onClick={openManager} style={mapToolbarBtnStyle}>📂 管理</button>
+        {/* 💾 保存・📂 開く・新規（3ボタンに統一）*/}
+        <button onClick={handleSave} style={mapToolbarBtnStyle}>💾 保存</button>
+        <button onClick={handleOpen} style={mapToolbarBtnStyle}>📂 開く</button>
         <button onClick={handleNewProject} style={mapToolbarBtnStyle}>新規プロジェクト</button>
-        {/* 現在のプロジェクト名 */}
-        {projectName && <span style={{ fontSize: 12, color: '#6b7280' }}>{projectName}</span>}
-        {isDirty && <span style={{ fontSize: 12, fontWeight: 600, color: '#f59e0b' }}>● 未保存</span>}
-        {/* 保存ステータス */}
+
+        {/* ファイル名＋保存状態（クリックで保存情報ダイアログ）*/}
+        <button
+          onClick={() => setShowSaveInfo(true)}
+          title="保存情報を表示"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 12, color: '#374151' }}>
+            {saveState === SaveState.NEW ? '新しいプロジェクト' : (currentFileName || projectName || 'プロジェクト')}
+          </span>
+          <span style={{
+            fontSize: 12, fontWeight: 600,
+            color: saveState === SaveState.SAVED ? '#0F6E56' : saveState === SaveState.DIRTY ? '#f59e0b' : '#9ca3af',
+          }}>
+            {saveState === SaveState.SAVED ? '保存済' : saveState === SaveState.DIRTY ? '変更あり' : '未保存'}
+          </span>
+        </button>
+
+        {/* 保存ステータス（一時メッセージ）*/}
         {projectSaveStatus && (
           <span style={{
             fontSize: 12, fontWeight: 600,
@@ -1692,6 +1852,52 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
         </div>
       </div>
       </div>
+
+      {/* ===== 保存情報ダイアログ（保存先ではなく保存方法を伝える）===== */}
+      {showSaveInfo && (
+        <div
+          onClick={() => setShowSaveInfo(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: 'white', borderRadius: 10, padding: 20, width: 380, maxWidth: '92vw', boxShadow: '0 8px 32px rgba(0,0,0,0.25)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>保存情報</h3>
+              <button onClick={() => setShowSaveInfo(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#666', lineHeight: 1 }}>×</button>
+            </div>
+            {(() => {
+              const canUseFsApi = typeof (window as any).showSaveFilePicker === 'function'
+              const rows: Array<[string, string]> = []
+              rows.push(['プロジェクト名', projectName || '（未設定）'])
+              rows.push(['ファイル名', currentFileName || '（未保存）'])
+              if (canUseFsApi) {
+                rows.push(['保存方法', currentFileHandleRef.current ? '同じファイルへ保存' : '保存時にファイルを選択'])
+              } else {
+                rows.push(['保存方法', 'ダウンロード'])
+              }
+              rows.push(['最終保存', lastSavedAt ? new Date(lastSavedAt).toLocaleString('ja-JP') : '（未保存）'])
+              return (
+                <div style={{ fontSize: 13 }}>
+                  {rows.map(([k, v]) => (
+                    <div key={k} style={{ display: 'flex', padding: '6px 0', borderBottom: '1px solid #f0f0f0' }}>
+                      <div style={{ width: 96, color: '#888', flexShrink: 0 }}>{k}</div>
+                      <div style={{ color: '#333', wordBreak: 'break-all' }}>{v}</div>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 12, fontSize: 11, color: '#999', lineHeight: 1.6 }}>
+                    {canUseFsApi
+                      ? '別の場所へ保存する場合は「名前を付けて保存」を使用してください（将来対応予定）。'
+                      : '保存先フォルダはブラウザのダウンロード設定に従います。'}
+                  </div>
+                </div>
+              )
+            })()}
+            <button onClick={() => setShowSaveInfo(false)}
+              style={{ width: '100%', marginTop: 16, padding: 10, fontSize: 14, fontWeight: 600, background: '#1D9E75', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ===== プロジェクト管理モーダル ===== */}
       {showManager && (
