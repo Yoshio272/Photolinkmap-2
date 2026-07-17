@@ -4,7 +4,7 @@
  * 図面・地図への配置を行わず、写真名一覧のリンク付きPDFを出力するモード。
  * Step1: 取込・一覧（番号/サムネ/ファイル名/撮影時刻）・並替・削除
  * Step2: クラウド同期（名前マッチング。MapPage.syncCloudと同方式）
- * Step3: PDF出力 — 後続ステップで追加
+ * Step3: PDF出力（A4縦・html2canvas＋リンク注釈。features/fileList/pdf.ts）
  *
  * 図面未読込でも動作する（pins / calib / photoStore に依存しない）。
  */
@@ -18,6 +18,7 @@ import {
   makeThumbnail, detectIs360, sortEntries, renumber,
   type FileEntry, type FileSortKey,
 } from '../../features/fileList'
+import { exportFileListPdf } from '../../features/fileList/pdf'
 
 interface Props {
   storageConfig: StorageConfig
@@ -59,6 +60,8 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
   const [sortKey, setSortKey]   = useState<FileSortKey>('imported')
   const [syncing, setSyncing]     = useState(false)
   const [syncStatus, setSyncStatus] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportStatus, setExportStatus] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const seqRef  = useRef(0)
 
@@ -205,6 +208,21 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
     }
   }
 
+  // ===== PDF出力（A4縦。生成ロジックは features/fileList/pdf.ts に分離）=====
+  async function exportPdf() {
+    setExporting(true)
+    setExportStatus('📄 PDF生成中...')
+    try {
+      const result = await exportFileListPdf(fileEntries, fileSiteName)
+      setExportStatus(`✓ PDF出力完了（${result.pages}ページ / リンク付き:${result.linked}件）`)
+      setStatusMsg('ファイルモード: PDF出力完了')
+    } catch (e: unknown) {
+      setExportStatus('❌ PDF生成エラー: ' + (e instanceof Error ? e.message : '失敗'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const count360 = fileEntries.filter(e => e.is360).length
 
   return (
@@ -305,9 +323,21 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
             {syncing ? '同期中...' : '☁ クラウド同期'}
           </button>
           {syncStatus && <div className="text-xs text-gray-600 break-all mb-1">{syncStatus}</div>}
-          <div className="info-box bg-gray-50 text-gray-400 mt-2">
-            PDF出力（Step3）は次ステップで追加予定です。
+        </div>
+      )}
+
+      {fileEntries.length > 0 && (
+        <div className="section">
+          <h4>PDF出力</h4>
+          <div className="info-blue mb-2 text-xs">
+            一覧をA4縦のリンク付きPDFにします（番号・写真・ファイル名・撮影時刻）。
+            未同期の行はリンクなしで出力されます。
           </div>
+          <button className="btn-primary w-full justify-center mb-2"
+            onClick={exportPdf} disabled={exporting}>
+            {exporting ? 'PDF生成中...' : '📄 PDF出力'}
+          </button>
+          {exportStatus && <div className="text-xs text-gray-600 break-all">{exportStatus}</div>}
         </div>
       )}
     </div>
