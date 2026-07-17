@@ -5,6 +5,7 @@
  * Step1: 取込・一覧（番号/サムネ/ファイル名/撮影時刻）・並替・削除
  * Step2: クラウド同期（名前マッチング。MapPage.syncCloudと同方式）
  * Step3: PDF出力（A4縦・html2canvas＋リンク注釈。features/fileList/pdf.ts）
+ * Step4: JSONファイル保存・読込（localStorage非依存）
  *
  * 図面未読込でも動作する（pins / calib / photoStore に依存しない）。
  */
@@ -16,6 +17,7 @@ import type { GoogleDriveProvider } from '../../services/storage/GoogleDriveProv
 import { getPinPdfLinkUrl } from '../../features/viewer/viewerTypes'
 import {
   makeThumbnail, detectIs360, sortEntries, renumber,
+  exportFileListJson, importFileListJson,
   type FileEntry, type FileSortKey,
 } from '../../features/fileList'
 import { exportFileListPdf } from '../../features/fileList/pdf'
@@ -62,6 +64,8 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
   const [syncStatus, setSyncStatus] = useState('')
   const [exporting, setExporting] = useState(false)
   const [exportStatus, setExportStatus] = useState('')
+  const [saveStatus, setSaveStatus] = useState('')
+  const jsonRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const seqRef  = useRef(0)
 
@@ -223,6 +227,37 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
     }
   }
 
+  // ===== JSONファイル保存・読込（Step4）=====
+  function saveJson() {
+    try {
+      exportFileListJson(fileEntries, fileSiteName)
+      setSaveStatus(`✓ 保存しました（${fileEntries.length}件）`)
+    } catch (e: unknown) {
+      setSaveStatus('❌ 保存エラー: ' + (e instanceof Error ? e.message : '失敗'))
+    }
+  }
+
+  async function loadJson(files: FileList | null) {
+    const f = files?.[0]
+    if (!f) return
+    if (fileEntries.length > 0 &&
+        !window.confirm('現在の一覧を読み込んだ内容で置き換えます。よろしいですか？')) {
+      if (jsonRef.current) jsonRef.current.value = ''
+      return
+    }
+    try {
+      const { siteName, entries } = await importFileListJson(f)
+      setFileEntries(entries)
+      if (siteName) setFileSiteName(siteName)
+      setSaveStatus(`✓ 読み込みました（${entries.length}件）`)
+      setStatusMsg(`ファイルモード: ${entries.length}件読み込みました`)
+    } catch (e: unknown) {
+      setSaveStatus('❌ ' + (e instanceof Error ? e.message : '読込失敗'))
+    } finally {
+      if (jsonRef.current) jsonRef.current.value = ''
+    }
+  }
+
   const count360 = fileEntries.filter(e => e.is360).length
 
   return (
@@ -340,6 +375,27 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
           {exportStatus && <div className="text-xs text-gray-600 break-all">{exportStatus}</div>}
         </div>
       )}
+
+      <div className="section">
+        <h4>保存 / 読込</h4>
+        <div className="info-blue mb-2 text-xs">
+          一覧をJSONファイルに保存し、後日読み込んで続きから作業できます
+          （サムネイル・撮影時刻・同期リンクを含みます）。
+        </div>
+        <div className="flex gap-2 mb-2">
+          <button className="btn flex-1 justify-center"
+            onClick={saveJson} disabled={fileEntries.length === 0}>
+            💾 保存
+          </button>
+          <button className="btn flex-1 justify-center"
+            onClick={() => jsonRef.current?.click()}>
+            📂 読込
+          </button>
+        </div>
+        <input ref={jsonRef} type="file" accept=".json,application/json" className="hidden"
+          onChange={e => loadJson(e.target.files)} />
+        {saveStatus && <div className="text-xs text-gray-600 break-all">{saveStatus}</div>}
+      </div>
     </div>
   )
 }
