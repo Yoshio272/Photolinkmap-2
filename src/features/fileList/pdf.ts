@@ -206,10 +206,15 @@ function buildPageDiv(
     const nameWrap = document.createElement('div')
     Object.assign(nameWrap.style, { flex: '1', minWidth: '0' } as CSSStyleDeclaration)
     const name = document.createElement('div')
-    name.textContent = `${e.is360 ? '🌐 ' : ''}${e.fileName}`
+    name.textContent = `${e.is360 ? '🌐 ' : ''}${middleTruncate(e.fileName)}`
+    // overflow:hidden＋1行省略はhtml2canvasの文字下ズレ描画でクリップされ
+    // 文字の下側が切れるため使わない。折り返しで全文を表示する（行高70px内に2行まで収まる）
     Object.assign(name.style, {
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       fontWeight: '600',
+      fontSize: '11px',
+      lineHeight: '1.5',
+      wordBreak: 'break-all',
+      paddingRight: '8px',
       color: e.cloudUrl ? '#1565C0' : '#111827',
       textDecoration: e.cloudUrl ? 'underline' : 'none',
     } as CSSStyleDeclaration)
@@ -234,12 +239,20 @@ function buildPageDiv(
 function cell(text: string, width: string): HTMLDivElement {
   const d = document.createElement('div')
   d.textContent = text
+  d.style.lineHeight = '1.5'
   if (width === 'auto') {
     Object.assign(d.style, { flex: '1', minWidth: '0' } as CSSStyleDeclaration)
   } else {
     Object.assign(d.style, { width, flexShrink: '0' } as CSSStyleDeclaration)
   }
   return d
+}
+
+// 極端に長いファイル名のみ中間省略（2行分に収まる長さは全文表示）
+function middleTruncate(name: string, max = 110): string {
+  if (name.length <= max) return name
+  const keep = Math.floor((max - 1) / 2)
+  return name.slice(0, keep) + '…' + name.slice(-keep)
 }
 
 function textLine(text: string): HTMLDivElement {
