@@ -3,7 +3,8 @@
  *
  * 図面・地図への配置を行わず、写真名一覧のリンク付きPDFを出力するモード。
  * データは pins / photoStore / calib と完全に独立。
- * Step2でクラウド同期（cloudUrl/fileId）、Step3でPDF出力を追加する。
+ * Step2: クラウド同期（cloudUrl/fileId） / Step3: PDF出力（pdf.ts）
+ * Step4: JSONファイル保存・読込（localStorage非依存。既存プロジェクト機構とは独立）
  */
 
 // ファイルモード専用エントリ（Pin・MapPinとは独立）
@@ -84,5 +85,81 @@ export function detectIs360(file: File): Promise<boolean> {
     }
     img.onerror = () => { URL.revokeObjectURL(url); resolve(false) }
     img.src = url
+  })
+}
+
+// ===== Step4: JSONファイル保存・読込 =====
+// 既存プロジェクト保存（features/project）とは独立。localStorageを消費しない。
+
+const FILELIST_KIND = 'photolinkmap-filelist'
+const FILELIST_VERSION = '1.0'
+
+interface FileListJson {
+  kind: string
+  version: string
+  siteName: string
+  savedAt: string
+  entries: FileEntry[]
+}
+
+/** 一覧をJSONファイルとしてダウンロード保存する */
+export function exportFileListJson(entries: FileEntry[], siteName: string): void {
+  const data: FileListJson = {
+    kind: FILELIST_KIND,
+    version: FILELIST_VERSION,
+    siteName,
+    savedAt: new Date().toISOString(),
+    entries,
+  }
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const dateStr = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `${siteName || '写真一覧'}_ファイルモード_${dateStr}.json`
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+/** JSONファイルから一覧を読み込む（形式検証つき） */
+export function importFileListJson(file: File): Promise<{ siteName: string; entries: FileEntry[] }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target?.result as string) as Partial<FileListJson>
+        if (data.kind !== FILELIST_KIND || !Array.isArray(data.entries)) {
+          reject(new Error('ファイルモードの保存ファイルではありません'))
+          return
+        }
+        // 期待するフィールドのみ取り出して再構築（余分・欠損データを排除）
+        const entries: FileEntry[] = data.entries
+          .filter(x => x && typeof x.fileName === 'string' && typeof x.thumbDataUrl === 'string')
+          .map((x, i) => ({
+            id: typeof x.id === 'string' ? x.id : `fe_import_${Date.now()}_${i}`,
+            no: 0,
+            importSeq: typeof x.importSeq === 'number' ? x.importSeq : i + 1,
+            fileName: x.fileName,
+            thumbDataUrl: x.thumbDataUrl,
+            takenAt: typeof x.takenAt === 'string' ? x.takenAt : undefined,
+            is360: x.is360 === true,
+            cloudUrl: typeof x.cloudUrl === 'string' ? x.cloudUrl : undefined,
+            fileId: typeof x.fileId === 'string' ? x.fileId : undefined,
+          }))
+        if (entries.length === 0) {
+          reject(new Error('写真データが含まれていません'))
+          return
+        }
+        resolve({
+          siteName: typeof data.siteName === 'string' ? data.siteName : '',
+          entries: renumber(entries),
+        })
+      } catch {
+        reject(new Error('JSONファイルの形式が正しくありません'))
+      }
+    }
+    reader.onerror = () => reject(new Error('読み込みに失敗しました'))
+    reader.readAsText(file)
   })
 }
