@@ -7,6 +7,8 @@ import { PhotosTab } from './PhotosTab'
 import { PlacementTab } from './PlacementTab'
 import { SyncTab }      from './SyncTab'
 import { ExportTab } from './ExportTab'
+import { FileTab } from './FileTab'
+import type { FileEntry } from '../../features/fileList'
 
 interface SidebarProps {
   activeTab: SideTab; setActiveTab: (t: SideTab) => void
@@ -36,6 +38,11 @@ interface SidebarProps {
   setCalib: (c: import('../../types').CalibState | ((p: import('../../types').CalibState) => import('../../types').CalibState)) => void
   photos: import('../../features/photos/photoStore').PhotoEntry[]
   dispatchPhotos: (action: import('../../features/photos/photoStore').PhotoAction) => void
+  // ファイルモード（図面配置なしの一覧PDF）
+  fileEntries: FileEntry[]
+  setFileEntries: (e: FileEntry[] | ((prev: FileEntry[]) => FileEntry[])) => void
+  fileSiteName: string
+  setFileSiteName: (n: string) => void
 }
 
 const TABS: { id: SideTab; label: string }[] = [
@@ -44,6 +51,7 @@ const TABS: { id: SideTab; label: string }[] = [
   { id: 'placement', label: '配置' },
   { id: 'sync',      label: '同期' },
   { id: 'export',    label: '出力' },
+  { id: 'file',      label: 'ファイル' },
 ]
 
 export function Sidebar(props: SidebarProps) {
@@ -69,6 +77,7 @@ export function Sidebar(props: SidebarProps) {
         {activeTab === 'sync'      && <SyncTab pins={props.pins} setPins={props.setPins} storageConfig={props.storageConfig} setStatusMsg={props.setStatusMsg} />}
         {activeTab === 'placement' && <PlacementTab {...props} onOpen360={props.onOpen360} />}
         {activeTab === 'export'    && <ExportTab    {...props} pageW={props.pageW ?? 0} pageH={props.pageH ?? 0} />}
+        {activeTab === 'file'      && <FileTab fileEntries={props.fileEntries} setFileEntries={props.setFileEntries} fileSiteName={props.fileSiteName} setFileSiteName={props.setFileSiteName} setStatusMsg={props.setStatusMsg} />}
       </div>
     </div>
   )

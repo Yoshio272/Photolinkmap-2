@@ -73,4 +73,4 @@ export interface Project {
 }
 
 export type AppMode = 'calib' | 'pin' | 'view' | 'place-photo';
-export type SideTab = 'settings' | 'photos' | 'placement' | 'sync' | 'export';
+export type SideTab = 'settings' | 'photos' | 'placement' | 'sync' | 'export' | 'file';

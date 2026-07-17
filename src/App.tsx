@@ -13,6 +13,7 @@ import { Toolbar } from './components/Toolbar/Toolbar'
 import { Sidebar } from './components/Sidebar/Sidebar'
 import { MapCanvas } from './components/Canvas/MapCanvas'
 import { WelcomeScreen } from './components/WelcomeScreen'
+import type { FileEntry } from './features/fileList'
 
 // suppress unused import
 void createEmptyProject
@@ -52,6 +53,10 @@ export default function App() {
   const [style,        setStyle]        = useState<StyleConfig>({ pinColor: '#1565C0', pinSize: 10, arrowLength: 30 })
   const [storageConfig, setStorageConfig] = useState<StorageConfig>(createDefaultStorageConfig())
   const [exportConfig, setExportConfig] = useState<ExportConfig>({ noLinkAction: 'skip', noteText: '', fileName: 'survey.pdf' })
+
+  // ===== ファイルモード（図面配置なしの一覧PDF。pins等と独立） =====
+  const [fileEntries,  setFileEntries]  = useState<FileEntry[]>([])
+  const [fileSiteName, setFileSiteName] = useState('')
 
   // ===== プロジェクト =====
   const [projectName, setProjectName] = useState('新規プロジェクト')
@@ -322,6 +327,10 @@ export default function App() {
           onStartManualPlace={handleStartManualPlace}
           photos={photos}
           dispatchPhotos={dispatchPhotos}
+          fileEntries={fileEntries}
+          setFileEntries={setFileEntries}
+          fileSiteName={fileSiteName}
+          setFileSiteName={setFileSiteName}
         />
       </div>
 
