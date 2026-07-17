@@ -77,7 +77,7 @@ export function Sidebar(props: SidebarProps) {
         {activeTab === 'sync'      && <SyncTab pins={props.pins} setPins={props.setPins} storageConfig={props.storageConfig} setStatusMsg={props.setStatusMsg} />}
         {activeTab === 'placement' && <PlacementTab {...props} onOpen360={props.onOpen360} />}
         {activeTab === 'export'    && <ExportTab    {...props} pageW={props.pageW ?? 0} pageH={props.pageH ?? 0} />}
-        {activeTab === 'file'      && <FileTab fileEntries={props.fileEntries} setFileEntries={props.setFileEntries} fileSiteName={props.fileSiteName} setFileSiteName={props.setFileSiteName} setStatusMsg={props.setStatusMsg} />}
+        {activeTab === 'file'      && <FileTab storageConfig={props.storageConfig} fileEntries={props.fileEntries} setFileEntries={props.setFileEntries} fileSiteName={props.fileSiteName} setFileSiteName={props.setFileSiteName} setStatusMsg={props.setStatusMsg} />}
       </div>
     </div>
   )

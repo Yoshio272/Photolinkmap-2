@@ -3,23 +3,48 @@
  *
  * 図面・地図への配置を行わず、写真名一覧のリンク付きPDFを出力するモード。
  * Step1: 取込・一覧（番号/サムネ/ファイル名/撮影時刻）・並替・削除
- * Step2: クラウド同期（名前マッチング） / Step3: PDF出力 — 後続ステップで追加
+ * Step2: クラウド同期（名前マッチング。MapPage.syncCloudと同方式）
+ * Step3: PDF出力 — 後続ステップで追加
  *
  * 図面未読込でも動作する（pins / calib / photoStore に依存しない）。
  */
 import { useRef, useState } from 'react'
 import { readExifDateTime } from '../../services/exifTime'
+import { getStorageProvider } from '../../services/storage'
+import type { StorageConfig, StorageFile } from '../../services/storage'
+import type { GoogleDriveProvider } from '../../services/storage/GoogleDriveProvider'
+import { getPinPdfLinkUrl } from '../../features/viewer/viewerTypes'
 import {
   makeThumbnail, detectIs360, sortEntries, renumber,
   type FileEntry, type FileSortKey,
 } from '../../features/fileList'
 
 interface Props {
+  storageConfig: StorageConfig
   fileEntries: FileEntry[]
   setFileEntries: (e: FileEntry[] | ((prev: FileEntry[]) => FileEntry[])) => void
   fileSiteName: string
   setFileSiteName: (n: string) => void
   setStatusMsg: (m: string) => void
+}
+
+// ファイルモード専用：通常写真をOpenSeadragonで開く /viewer?type=image URLを組み立てる
+// （共通関数 getPinPdfLinkUrl は変更せず、表示先の切替をファイルモードに閉じ込める。
+//  地図モードの buildMapImageViewerUrl と同方針）
+function buildFileImageViewerUrl(
+  fileId: string | undefined,
+  title: string | undefined,
+  provider: string,
+  sharedUrl: string | undefined,
+): string {
+  const base = typeof window !== 'undefined' ? window.location.origin : ''
+  const params = new URLSearchParams()
+  params.set('type', 'image')
+  if (fileId) params.set('fileId', fileId)
+  if (title) params.set('title', title)
+  if (sharedUrl) params.set('shared', sharedUrl)
+  if (provider && provider !== 'google-drive') params.set('storageProvider', provider)
+  return `${base}/viewer?${params.toString()}`
 }
 
 const SORT_LABELS: { key: FileSortKey; label: string }[] = [
@@ -28,10 +53,12 @@ const SORT_LABELS: { key: FileSortKey; label: string }[] = [
   { key: 'takenAt',  label: '時刻順' },
 ]
 
-export function FileTab({ fileEntries, setFileEntries, fileSiteName, setFileSiteName, setStatusMsg }: Props) {
+export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteName, setFileSiteName, setStatusMsg }: Props) {
   const [loading, setLoading]   = useState(false)
   const [progress, setProgress] = useState(0)
   const [sortKey, setSortKey]   = useState<FileSortKey>('imported')
+  const [syncing, setSyncing]     = useState(false)
+  const [syncStatus, setSyncStatus] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const seqRef  = useRef(0)
 
@@ -102,6 +129,82 @@ export function FileTab({ fileEntries, setFileEntries, fileSiteName, setFileSite
     setFileEntries([])
   }
 
+  // ===== クラウド同期（地図モードsyncCloudと同じ名前マッチング方式。両クラウド対応）=====
+  async function syncCloud() {
+    const provider = getStorageProvider(storageConfig.provider)
+    const err = provider.validateConfig(storageConfig)
+    if (err) { setSyncStatus('❌ ' + err); return }
+    if (fileEntries.length === 0) { setSyncStatus('先に写真を取り込んでください'); return }
+
+    const folderId = storageConfig.provider === 'google-drive'
+      ? storageConfig.googleDrive.folderId
+      : (storageConfig.box.folderId ?? '')
+
+    setSyncing(true)
+    setSyncStatus('📂 クラウドのファイル一覧を取得中...')
+    try {
+      const result = await (provider as GoogleDriveProvider).listFiles(folderId, storageConfig)
+      if (!result.success || !result.files?.length) {
+        setSyncStatus('❌ ' + (result.error || 'ファイル取得失敗'))
+        setSyncing(false)
+        return
+      }
+      // ファイル名 → StorageFile のマップ（完全一致 → 拡張子除きの緩和一致）
+      const fileMap: Record<string, StorageFile> = {}
+      result.files.forEach(f => { fileMap[f.name.toLowerCase()] = f })
+
+      const isBox = storageConfig.provider === 'box'
+      const boxToken = isBox ? (localStorage.getItem('box_access_token') ?? '') : ''
+
+      let matched = 0, unmatched = 0, linked360 = 0
+      const updated: FileEntry[] = []
+      for (const entry of fileEntries) {
+        const fn = entry.fileName.toLowerCase()
+        const base = fn.replace(/\.[^.]+$/, '')
+        const hit = fileMap[fn]
+          ?? Object.values(fileMap).find(f => f.name.toLowerCase().replace(/\.[^.]+$/, '') === base)
+        if (!hit) { unmatched++; updated.push(entry); continue }
+        matched++
+
+        // Boxの場合、共有リンク(download_url)を取得（外部閲覧に必要。地図モードと同じ）
+        let sharedUrl: string | undefined
+        if (isBox && boxToken) {
+          try {
+            const res = await fetch('/.netlify/functions/box-proxy', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'create_shared_link', token: boxToken, fileId: hit.fileId }),
+            })
+            const data = await res.json() as { shared_link?: { download_url?: string } }
+            if (data.shared_link?.download_url) sharedUrl = data.shared_link.download_url
+          } catch { /* 共有リンク取得失敗時はsharedUrlなしで続行 */ }
+        }
+
+        let cloudUrl: string
+        if (entry.is360) {
+          // 360度 → Photo Sphere Viewer（既存の共通関数。lat/lngは位置情報なしのため0,0）
+          cloudUrl = getPinPdfLinkUrl(
+            'photosphere', hit.fileId, hit.viewUrl, entry.fileName,
+            0, 0, storageConfig.provider, sharedUrl,
+          )
+          linked360++
+        } else {
+          // 通常写真 → OpenSeadragon（/viewer?type=image）
+          cloudUrl = buildFileImageViewerUrl(hit.fileId, entry.fileName, storageConfig.provider, sharedUrl)
+        }
+        updated.push({ ...entry, cloudUrl, fileId: hit.fileId })
+      }
+      setFileEntries(updated)
+      const s360 = linked360 > 0 ? ` / 360°:${linked360}件` : ''
+      setSyncStatus(`✓ ${result.files.length}件取得 / マッチ:${matched}件 / 未一致:${unmatched}件${s360}`)
+      setStatusMsg(`ファイルモード: クラウド同期完了（マッチ:${matched}件）`)
+    } catch (e: unknown) {
+      setSyncStatus('❌ ' + (e instanceof Error ? e.message : '接続エラー'))
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const count360 = fileEntries.filter(e => e.is360).length
 
   return (
@@ -161,7 +264,12 @@ export function FileTab({ fileEntries, setFileEntries, fileSiteName, setFileSite
                 <img src={e.thumbDataUrl} alt="" className="w-9 h-9 object-cover rounded flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="truncate font-medium" title={e.fileName}>
-                    {e.is360 ? '🌐 ' : ''}{e.fileName}
+                    {e.cloudUrl
+                      ? <a href={e.cloudUrl} target="_blank" rel="noopener noreferrer"
+                          className="text-[#1565C0] hover:underline">
+                          {e.is360 ? '🌐 ' : ''}{e.fileName}
+                        </a>
+                      : <>{e.is360 ? '🌐 ' : ''}{e.fileName}</>}
                   </div>
                   <div className="flex items-center gap-1 mt-0.5">
                     <span className="text-gray-400">{e.takenAt ?? '撮影時刻なし'}</span>
@@ -182,8 +290,23 @@ export function FileTab({ fileEntries, setFileEntries, fileSiteName, setFileSite
             ))}
           </div>
 
+        </div>
+      )}
+
+      {fileEntries.length > 0 && (
+        <div className="section">
+          <h4>クラウド同期</h4>
+          <div className="info-blue mb-2 text-xs">
+            保存先設定（Drive/Box）のフォルダとファイル名でマッチングし、一覧の各行にリンクを付けます。
+            同期後はファイル名クリックで写真が開きます。
+          </div>
+          <button className="btn-success w-full justify-center mb-2"
+            onClick={syncCloud} disabled={syncing}>
+            {syncing ? '同期中...' : '☁ クラウド同期'}
+          </button>
+          {syncStatus && <div className="text-xs text-gray-600 break-all mb-1">{syncStatus}</div>}
           <div className="info-box bg-gray-50 text-gray-400 mt-2">
-            クラウド同期（Step2）・PDF出力（Step3）は次ステップで追加予定です。
+            PDF出力（Step3）は次ステップで追加予定です。
           </div>
         </div>
       )}
