@@ -7,6 +7,8 @@ import { calcArrowPDF, NO_ARROW } from '../../features/arrow'
 import { getPinType } from '../../types'
 import { getPinPdfLinkUrl } from '../../features/viewer/viewerTypes'
 import type { StorageConfig } from '../../services/storage'
+import { exportPptxWithPins } from '../../features/export/pptx'
+import { renderBackground } from '../../services/background'
 // arrow utilities used below
 
 interface Props {
@@ -221,10 +223,92 @@ export function ExportTab({ pins, pdfLoaded, bgSource, canvasRef, pageW, pageH, 
     } finally { setExporting(false) }
   }
 
+  /** ピンのハイパーリンクURLを解決（PDF出力と同一ロジック / Box共有リンク対応） */
+  async function buildLinkMap(): Promise<Record<string, string>> {
+    const linkMap: Record<string, string> = {}
+    if (exportConfig.enableHyperlink === false) return linkMap
+
+    // Box 360度/静止画ピンの共有リンクを事前取得（第三者閲覧用）
+    const sharedUrlMap: Record<string, string> = {}
+    const boxToken = localStorage.getItem('box_access_token') ?? ''
+    const boxPins = pins.filter(p =>
+      (getPinType(p) === '360' || getPinType(p) === 'photo') &&
+      (storageConfig?.provider === 'box') &&
+      (p.media?.driveFileId || (p.media?.url ?? p.link).match(/app\.box\.com\/file\/(\d+)/))
+    )
+    if (boxPins.length > 0 && boxToken) {
+      prog(15, `共有リンク取得中... (${boxPins.length}件)`)
+      for (const p of boxPins) {
+        const fid = p.media?.driveFileId
+          ?? (p.media?.url ?? p.link).match(/app\.box\.com\/file\/(\d+)/)?.[1]
+        if (!fid) continue
+        try {
+          const res = await fetch('/.netlify/functions/box-proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'create_shared_link', token: boxToken, fileId: fid }),
+          })
+          const data = await res.json() as { shared_link?: { download_url?: string }; error?: string }
+          if (data.shared_link?.download_url) sharedUrlMap[p.id] = data.shared_link.download_url
+        } catch (e) {
+          console.warn(`SHARED LINK error for ${fid}:`, e)
+        }
+      }
+    }
+
+    for (const pin of pins) {
+      const viewerType = getPinType(pin) === '360' ? 'photosphere' as const : 'image' as const
+      linkMap[pin.id] = getPinPdfLinkUrl(
+        viewerType,
+        pin.media?.driveFileId,
+        pin.media?.url || pin.link,
+        pin.name,
+        pin.lat,
+        pin.lng,
+        storageConfig?.provider ?? 'google-drive',
+        sharedUrlMap[pin.id],
+      )
+    }
+    return linkMap
+  }
+
+  async function doExportPptx() {
+    if (!pdfLoaded) { alert('図面を読み込んでください'); return }
+    if (!pins.length) { alert('ピンがありません'); return }
+    if (!bgSource) { alert('図面を読み込んでください'); return }
+    if (pageW <= 0 || pageH <= 0) { alert('図面サイズが取得できません。図面を読み込み直してください。'); return }
+
+    setExporting(true); setProgress(0)
+    try {
+      // 背景を原寸 viewport（pin座標と同一基準）で描画して dataURL 化
+      prog(5, '背景を準備中...')
+      const off = document.createElement('canvas')
+      await renderBackground(bgSource, off, 1)
+      const imageDataUrl = off.toDataURL('image/jpeg', 0.92)
+
+      const linkMap = await buildLinkMap()
+
+      const base = (exportConfig.fileName || projectName || 'survey').replace(/\.(pdf|pptx)$/i, '')
+      await exportPptxWithPins({
+        imageDataUrl,
+        pageW,
+        pageH,
+        pins,
+        linkMap,
+        noteText: exportConfig.noteText,
+        fileName: `${base}.pptx`,
+        onProgress: (p, m) => prog(p, m),
+      })
+      setStatusMsg(`✓ PowerPoint出力完了: ${base}.pptx`)
+    } catch (e: unknown) {
+      prog(0, '❌ ' + (e instanceof Error ? e.message : 'PPTX出力エラー'))
+    } finally { setExporting(false) }
+  }
+
   return (
     <div className="overflow-y-auto flex-1 flex flex-col gap-0">
       <div className="section">
-        <h4>STEP5 PDF出力</h4>
+        <h4>STEP5 出力（PDF / PowerPoint）</h4>
         <div className={`info-box ${!pdfLoaded ? 'info-warn' : !pins.length ? 'info-warn' : 'info-green'}`}>
           {!pdfLoaded ? '図面を読み込んでください' : !pins.length ? 'ピンがありません'
             : `✓ ${pins.length}件のピン | 🔗リンク付き: ${linked}件`}
@@ -291,6 +375,15 @@ export function ExportTab({ pins, pdfLoaded, bgSource, canvasRef, pageW, pageH, 
           onClick={doExport} disabled={exporting || !pdfLoaded || !pins.length}>
           📤 ハイパーリンク付きPDFを出力
         </button>
+        <button
+          className="w-full mt-2 py-3 text-sm font-bold text-white rounded-lg flex items-center justify-center gap-2 transition-colors"
+          style={{ background: exporting || !pdfLoaded || !pins.length ? '#c9b8e6' : '#7C4DFF', cursor: exporting ? 'not-allowed' : 'pointer' }}
+          onClick={doExportPptx} disabled={exporting || !pdfLoaded || !pins.length}>
+          📊 PowerPoint（◯図形）で出力
+        </button>
+        <div className="text-xs text-gray-500 mt-2 leading-relaxed">
+          PowerPointはピンが編集可能な◯図形になります（通し番号・向き矢印・写真リンク付き）。
+        </div>
       </div>
     </div>
   )
