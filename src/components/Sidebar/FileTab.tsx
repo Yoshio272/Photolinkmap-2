@@ -21,6 +21,7 @@ import {
   type FileEntry, type FileSortKey,
 } from '../../features/fileList'
 import { exportFileListPdf } from '../../features/fileList/pdf'
+import { exportFileListPptx } from '../../features/fileList/pptx'
 
 interface Props {
   storageConfig: StorageConfig
@@ -227,6 +228,21 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
     }
   }
 
+  // ===== PowerPoint出力（A4縦・編集できる表。features/fileList/pptx.ts）=====
+  async function exportPptx() {
+    setExporting(true)
+    setExportStatus('📊 PowerPoint生成中...')
+    try {
+      const result = await exportFileListPptx(fileEntries, fileSiteName)
+      setExportStatus(`✓ PowerPoint出力完了（${result.pages}ページ / リンク付き:${result.linked}件）`)
+      setStatusMsg('ファイルモード: PowerPoint出力完了')
+    } catch (e: unknown) {
+      setExportStatus('❌ PowerPoint生成エラー: ' + (e instanceof Error ? e.message : '失敗'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   // ===== JSONファイル保存・読込（Step4）=====
   function saveJson() {
     try {
@@ -363,15 +379,24 @@ export function FileTab({ storageConfig, fileEntries, setFileEntries, fileSiteNa
 
       {fileEntries.length > 0 && (
         <div className="section">
-          <h4>PDF出力</h4>
+          <h4>出力（PDF / PowerPoint）</h4>
           <div className="info-blue mb-2 text-xs">
-            一覧をA4縦のリンク付きPDFにします（番号・写真・ファイル名・撮影時刻）。
+            一覧をA4縦のリンク付きファイルにします（番号・写真・ファイル名・撮影時刻）。
             未同期の行はリンクなしで出力されます。
           </div>
           <button className="btn-primary w-full justify-center mb-2"
             onClick={exportPdf} disabled={exporting}>
-            {exporting ? 'PDF生成中...' : '📄 PDF出力'}
+            {exporting ? '生成中...' : '📄 PDF出力'}
           </button>
+          <button
+            className="w-full mb-2 py-3 text-sm font-bold text-white rounded-lg flex items-center justify-center gap-2 transition-colors"
+            style={{ background: exporting ? '#c9b8e6' : '#7C4DFF', cursor: exporting ? 'not-allowed' : 'pointer' }}
+            onClick={exportPptx} disabled={exporting}>
+            {exporting ? '生成中...' : '📊 PowerPoint出力'}
+          </button>
+          <div className="text-xs text-gray-500 mb-2 leading-relaxed">
+            PowerPointは文字・表がそのまま編集できます（PDFは画像として出力されます）。
+          </div>
           {exportStatus && <div className="text-xs text-gray-600 break-all">{exportStatus}</div>}
         </div>
       )}
