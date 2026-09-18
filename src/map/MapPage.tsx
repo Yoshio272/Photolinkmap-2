@@ -657,6 +657,74 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
     }
   }
 
+  // ===== C-3：画像＋ピンリンクをA3横PowerPoint化 =====
+  async function exportPptx() {
+    if (!previewUrl || !captureMetaRef.current) {
+      setCaptureLog('先にプレビュー画像を生成してください')
+      return
+    }
+    setExporting(true)
+    try {
+      const PptxGenJS = (await import('pptxgenjs')).default
+      const meta = captureMetaRef.current
+
+      // A3横（1191×842pt）→ inch換算
+      const slideW = 1191 / 72
+      const slideH = 842 / 72
+      const pptx = new PptxGenJS()
+      pptx.defineLayout({ name: 'A3L', width: slideW, height: slideH })
+      pptx.layout = 'A3L'
+      const slide = pptx.addSlide()
+
+      // 画像をページ中央に収める（アスペクト比保持）
+      const margin = 20 / 72
+      const maxW = slideW - margin * 2
+      const maxH = slideH - margin * 2
+      const scale = Math.min(maxW / meta.imgW, maxH / meta.imgH)
+      const imgW = meta.imgW * scale
+      const imgH = meta.imgH * scale
+      const imgX = (slideW - imgW) / 2
+      const imgY = (slideH - imgH) / 2
+      slide.addImage({ data: previewUrl, x: imgX, y: imgY, w: imgW, h: imgH })
+
+      // 各ピン位置に「◯図形」を配置（編集可能・番号入り・リンク付き）
+      const containerW = captureContainerRef.current?.getBoundingClientRect().width ?? meta.imgW
+      const hitRatio = 40 / containerW
+      const r = Math.max(hitRatio * imgW, 12 / 72) / 2
+      let linked = 0
+      for (const p of meta.pins) {
+        const cx = imgX + p.xRatio * imgW
+        const cy = imgY + p.yRatio * imgH
+        if (p.cloudUrl) linked++
+        slide.addText(String(p.no), {
+          shape: pptx.ShapeType.ellipse,
+          x: cx - r, y: cy - r, w: r * 2, h: r * 2,
+          fill: { color: '1565C0' },
+          line: { color: 'FFFFFF', width: 1.5 },
+          color: 'FFFFFF',
+          fontSize: Math.max(6, Math.round(r * 72 * 0.85)),
+          bold: true, align: 'center', valign: 'middle',
+          ...(p.cloudUrl ? { hyperlink: { url: p.cloudUrl } } : {}),
+        })
+      }
+
+      // 現場名（日本語もそのまま使える）
+      if (siteName) {
+        slide.addText(siteName, {
+          x: margin, y: margin, w: slideW / 2, h: 0.4,
+          fontSize: 18, bold: true, color: '111827',
+        })
+      }
+
+      await pptx.writeFile({ fileName: `${siteName || '現場位置図'}_位置図.pptx` })
+      setCaptureLog(`✓ PowerPoint出力完了（リンク付きピン:${linked}件）`)
+    } catch (e: unknown) {
+      setCaptureLog('❌ PowerPoint生成エラー: ' + (e instanceof Error ? e.message : '失敗'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   // ===== 地図タイルの切り替え（航空写真／標準地図／淡色地図）=====
   const switchBaseMap = useCallback((key: BaseMapKey) => {
     const map = mapRef.current
@@ -1793,7 +1861,17 @@ body.pdf-capturing .map-pin-badge-text { transform: translateY(-8px); }`
                   background: exporting ? '#ccc' : '#1565C0', color: 'white',
                   border: 'none', borderRadius: 6, cursor: exporting ? 'default' : 'pointer',
                 }}>
-                {exporting ? '⏳ PDF生成中...' : '📄 リンク付きPDFを出力（A3横）'}
+                {exporting ? '⏳ 生成中...' : '📄 リンク付きPDFを出力（A3横）'}
+              </button>
+              <button
+                onClick={exportPptx}
+                disabled={exporting}
+                style={{
+                  width: '100%', marginTop: 8, padding: 10, fontSize: 14, fontWeight: 600,
+                  background: exporting ? '#ccc' : '#7C4DFF', color: 'white',
+                  border: 'none', borderRadius: 6, cursor: exporting ? 'default' : 'pointer',
+                }}>
+                {exporting ? '⏳ 生成中...' : '📊 PowerPointを出力（A3横）'}
               </button>
               <div style={{ fontSize: 10, color: '#999', marginTop: 4, lineHeight: 1.5 }}>
                 ピン位置にクラウドへのリンクが埋め込まれます。クラウド未同期のピンはリンクなしになります。
